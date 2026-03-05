@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-# videogenerator-web
-Web version of the Video Generator repository.
-=======
 # VideoGen Studio
 
 A MERN stack web app that replicates and extends your Kotlin video generator — built with **MongoDB**, **Express**, **React** (shadcn/ui + Tailwind), and **Node.js**, using **FFmpeg** on the backend.
