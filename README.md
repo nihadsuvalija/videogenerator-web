@@ -119,4 +119,3 @@ videogen/
 |----------|---------|-------------|
 | `MONGO_URI` | `mongodb://127.0.0.1:27017/videogen` | MongoDB connection string |
 | `PORT` | `5000` | Backend server port |
->>>>>>> a8fd9ed1 (Initial working version of web application)

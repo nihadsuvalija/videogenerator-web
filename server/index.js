@@ -15,17 +15,32 @@ app.use(express.json());
 const DATA_ROOT = path.join(__dirname, 'data');
 const OUTPUT_DIR = path.join(DATA_ROOT, 'outputs');
 const BATCHES_DIR = path.join(DATA_ROOT, 'batches');
-const ASSETS_DIR = path.join(DATA_ROOT, 'assets'); // logo etc.
+const ASSETS_DIR = path.join(DATA_ROOT, 'assets');
+const OVERLAYS_DIR = path.join(DATA_ROOT, 'overlays');
 
-[DATA_ROOT, OUTPUT_DIR, BATCHES_DIR, ASSETS_DIR].forEach(d => fs.mkdirSync(d, { recursive: true }));
+[DATA_ROOT, OUTPUT_DIR, BATCHES_DIR, ASSETS_DIR, OVERLAYS_DIR].forEach(d => fs.mkdirSync(d, { recursive: true }));
 
-// Serve output videos
 app.use('/outputs', express.static(OUTPUT_DIR));
 app.use('/assets', express.static(ASSETS_DIR));
 
+// ─── Supported Resolutions ───────────────────────────────────────────────────
+const RESOLUTIONS = {
+  '1920x1080': { w: 1920, h: 1080, label: '1920×1080 — 16:9 Landscape (YouTube / TV)' },
+  '1080x1080': { w: 1080, h: 1080, label: '1080×1080 — 1:1 Square (Instagram Feed)' },
+  '1080x1920': { w: 1080, h: 1920, label: '1080×1920 — 9:16 Portrait (Reels / TikTok / Shorts)' },
+  '3840x2160': { w: 3840, h: 2160, label: '3840×2160 — 4K Landscape' },
+  '2160x3840': { w: 2160, h: 3840, label: '2160×3840 — 4K Portrait' },
+};
+
+app.get('/api/resolutions', (req, res) => {
+  res.json(Object.entries(RESOLUTIONS).map(([key, val]) => ({ key, ...val })));
+});
+
 // ─── MongoDB ──────────────────────────────────────────────────────────────────
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/videogen';
-mongoose.connect(MONGO_URI).then(() => console.log('MongoDB connected')).catch(e => console.error('MongoDB error:', e));
+mongoose.connect(MONGO_URI)
+  .then(() => console.log('MongoDB connected'))
+  .catch(e => console.error('MongoDB error:', e));
 
 const JobSchema = new mongoose.Schema({
   id: { type: String, default: uuidv4 },
@@ -38,28 +53,21 @@ const JobSchema = new mongoose.Schema({
   imageFiles: [String],
   logoText: String,
   logoSubtext: String,
+  resolution: String,
   createdAt: { type: Date, default: Date.now }
 });
 const Job = mongoose.model('Job', JobSchema);
 
-const BatchSchema = new mongoose.Schema({
-  name: String, // e.g. BATCH_001
-  createdAt: { type: Date, default: Date.now }
-});
-const Batch = mongoose.model('Batch', BatchSchema);
-
-// ─── Multer ───────────────────────────────────────────────────────────────────
-const storage = multer.diskStorage({
+// ─── Multer configs ───────────────────────────────────────────────────────────
+const batchStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const batchName = req.params.batchName;
-    const type = req.params.type; // 'videos' or 'images'
-    const dir = path.join(BATCHES_DIR, batchName, type);
+    const dir = path.join(BATCHES_DIR, req.params.batchName, req.params.type);
     fs.mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
   filename: (req, file, cb) => cb(null, file.originalname)
 });
-const upload = multer({ storage });
+const batchUpload = multer({ storage: batchStorage });
 
 const logoStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, ASSETS_DIR),
@@ -67,18 +75,28 @@ const logoStorage = multer.diskStorage({
 });
 const logoUpload = multer({ storage: logoStorage });
 
+const overlayStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, OVERLAYS_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${req.params.token}${ext}`);
+  }
+});
+const overlayUpload = multer({ storage: overlayStorage });
+
 // ─── Batch Routes ─────────────────────────────────────────────────────────────
-// List all batches
 app.get('/api/batches', async (req, res) => {
   try {
     const dirs = fs.existsSync(BATCHES_DIR) ? fs.readdirSync(BATCHES_DIR) : [];
     const batches = dirs
-      .filter(d => fs.statSync(path.join(BATCHES_DIR, d)).isDirectory())
+      .filter(d => {
+        try { return fs.statSync(path.join(BATCHES_DIR, d)).isDirectory(); } catch { return false; }
+      })
       .map(name => {
         const vDir = path.join(BATCHES_DIR, name, 'videos');
         const iDir = path.join(BATCHES_DIR, name, 'images');
-        const videoCount = fs.existsSync(vDir) ? fs.readdirSync(vDir).filter(f => isVideo(f)).length : 0;
-        const imageCount = fs.existsSync(iDir) ? fs.readdirSync(iDir).filter(f => isImage(f)).length : 0;
+        const videoCount = fs.existsSync(vDir) ? fs.readdirSync(vDir).filter(isVideo).length : 0;
+        const imageCount = fs.existsSync(iDir) ? fs.readdirSync(iDir).filter(isImage).length : 0;
         return { name, videoCount, imageCount };
       });
     res.json(batches);
@@ -87,7 +105,6 @@ app.get('/api/batches', async (req, res) => {
   }
 });
 
-// Create batch
 app.post('/api/batches', async (req, res) => {
   try {
     const { name } = req.body;
@@ -101,22 +118,20 @@ app.post('/api/batches', async (req, res) => {
   }
 });
 
-// Get batch files
 app.get('/api/batches/:batchName/files', (req, res) => {
   const { batchName } = req.params;
   const vDir = path.join(BATCHES_DIR, batchName, 'videos');
   const iDir = path.join(BATCHES_DIR, batchName, 'images');
-  const videos = fs.existsSync(vDir) ? fs.readdirSync(vDir).filter(isVideo) : [];
-  const images = fs.existsSync(iDir) ? fs.readdirSync(iDir).filter(isImage) : [];
-  res.json({ videos, images });
+  res.json({
+    videos: fs.existsSync(vDir) ? fs.readdirSync(vDir).filter(isVideo) : [],
+    images: fs.existsSync(iDir) ? fs.readdirSync(iDir).filter(isImage) : [],
+  });
 });
 
-// Upload files to batch
-app.post('/api/batches/:batchName/upload/:type', upload.array('files'), (req, res) => {
+app.post('/api/batches/:batchName/upload/:type', batchUpload.array('files'), (req, res) => {
   res.json({ uploaded: req.files.map(f => f.originalname) });
 });
 
-// Delete file from batch
 app.delete('/api/batches/:batchName/:type/:filename', (req, res) => {
   const { batchName, type, filename } = req.params;
   const filePath = path.join(BATCHES_DIR, batchName, type, filename);
@@ -124,16 +139,162 @@ app.delete('/api/batches/:batchName/:type/:filename', (req, res) => {
   res.json({ deleted: filename });
 });
 
-// Upload logo
+// ─── Asset Routes ─────────────────────────────────────────────────────────────
 app.post('/api/assets/logo', logoUpload.single('logo'), (req, res) => {
   res.json({ file: req.file.filename });
 });
 
-// Get logo info
 app.get('/api/assets/logo', (req, res) => {
   const files = fs.existsSync(ASSETS_DIR) ? fs.readdirSync(ASSETS_DIR).filter(f => /^logo\./i.test(f)) : [];
   res.json({ logo: files[0] || null });
 });
+
+// Upload SRT subtitle
+app.post('/api/assets/subtitle/:token', overlayUpload.single('subtitle'), (req, res) => {
+  res.json({ file: req.file.filename });
+});
+
+// Upload MP3/audio
+app.post('/api/assets/audio/:token', overlayUpload.single('audio'), (req, res) => {
+  res.json({ file: req.file.filename });
+});
+
+// Get current overlay files for a session token
+app.get('/api/assets/overlays/:token', (req, res) => {
+  const { token } = req.params;
+  const files = fs.existsSync(OVERLAYS_DIR) ? fs.readdirSync(OVERLAYS_DIR) : [];
+  const srt = files.find(f => f.startsWith(token) && f.endsWith('.srt')) || null;
+  const audio = files.find(f => f.startsWith(token) && /\.(mp3|m4a|wav)$/.test(f)) || null;
+  res.json({ srt, audio });
+});
+
+// Delete an overlay file
+app.delete('/api/assets/overlays/:token/:type', (req, res) => {
+  const { token, type } = req.params;
+  const files = fs.existsSync(OVERLAYS_DIR) ? fs.readdirSync(OVERLAYS_DIR) : [];
+  const match = files.find(f =>
+    f.startsWith(token) && (type === 'srt' ? f.endsWith('.srt') : /\.(mp3|m4a|wav)$/.test(f))
+  );
+  if (match) fs.unlinkSync(path.join(OVERLAYS_DIR, match));
+  res.json({ deleted: match || null });
+});
+
+// ─── Whisper Transcription ────────────────────────────────────────────────────
+// In-memory transcription job store { [token]: { status, progress, error, srtFile } }
+const transcriptionJobs = {};
+
+app.post('/api/lyrics/transcribe/:token', async (req, res) => {
+  const { token } = req.params;
+  const { model = 'base' } = req.body; // tiny | base | small | medium | large
+
+  // Find the uploaded audio for this token
+  const files = fs.existsSync(OVERLAYS_DIR) ? fs.readdirSync(OVERLAYS_DIR) : [];
+  const audioFile = files.find(f => f.startsWith(token) && /\.(mp3|m4a|wav)$/.test(f));
+  if (!audioFile) return res.status(400).json({ error: 'No audio file found for this session. Upload an MP3 first.' });
+
+  const audioPath = path.join(OVERLAYS_DIR, audioFile);
+  transcriptionJobs[token] = { status: 'running', progress: 0, error: null, srtFile: null };
+  res.json({ started: true });
+
+  // Run whisper async
+  runWhisper(token, audioPath, model).catch(e => {
+    transcriptionJobs[token] = { status: 'error', progress: 0, error: e.message, srtFile: null };
+  });
+});
+
+app.get('/api/lyrics/status/:token', (req, res) => {
+  const job = transcriptionJobs[req.params.token];
+  if (!job) return res.json({ status: 'idle' });
+  res.json(job);
+});
+
+// Serve the SRT file content for preview/editing
+app.get('/api/lyrics/srt/:token', (req, res) => {
+  const { token } = req.params;
+  const files = fs.existsSync(OVERLAYS_DIR) ? fs.readdirSync(OVERLAYS_DIR) : [];
+  const srtFile = files.find(f => f.startsWith(token) && f.endsWith('.srt'));
+  if (!srtFile) return res.status(404).json({ error: 'No SRT file found' });
+  res.send(fs.readFileSync(path.join(OVERLAYS_DIR, srtFile), 'utf8'));
+});
+
+// Save edited SRT content back
+app.put('/api/lyrics/srt/:token', express.text(), (req, res) => {
+  const { token } = req.params;
+  const files = fs.existsSync(OVERLAYS_DIR) ? fs.readdirSync(OVERLAYS_DIR) : [];
+  const srtFile = files.find(f => f.startsWith(token) && f.endsWith('.srt'));
+  const srtPath = srtFile
+    ? path.join(OVERLAYS_DIR, srtFile)
+    : path.join(OVERLAYS_DIR, `${token}.srt`);
+  fs.writeFileSync(srtPath, req.body, 'utf8');
+  res.json({ saved: true, file: path.basename(srtPath) });
+});
+
+async function runWhisper(token, audioPath, model) {
+  return new Promise((resolve, reject) => {
+    // Output to OVERLAYS_DIR, named by token so we can find it later
+    const outputDir = OVERLAYS_DIR;
+    // whisper outputs <basename>.srt — we'll rename after
+    const baseName = path.basename(audioPath, path.extname(audioPath));
+
+    const args = [
+      '-m', 'whisper',
+      audioPath,
+      '--model', model,
+      '--output_format', 'srt',
+      '--output_dir', outputDir,
+      '--verbose', 'False',
+    ];
+
+    console.log(`whisper transcription starting: python3 ${args.join(' ')}`);
+    const proc = spawn('python3', args);
+    let stderr = '';
+
+    proc.stderr.on('data', d => {
+      stderr += d.toString();
+      // Try to parse rough progress from whisper output
+      const match = stderr.match(/(\d+)%/g);
+      if (match) {
+        const pct = parseInt(match[match.length - 1]);
+        transcriptionJobs[token].progress = pct;
+      }
+    });
+
+    proc.on('close', code => {
+      if (code !== 0) {
+        const errMsg = stderr.includes('No module named whisper')
+          ? 'Whisper not installed. Run: pip install openai-whisper'
+          : `Whisper exited ${code}: ${stderr.slice(-300)}`;
+        transcriptionJobs[token] = { status: 'error', progress: 0, error: errMsg, srtFile: null };
+        return reject(new Error(errMsg));
+      }
+
+      // Rename whisper's output from <baseName>.srt to <token>.srt
+      const whisperOut = path.join(outputDir, `${baseName}.srt`);
+      const tokenSrt = path.join(outputDir, `${token}.srt`);
+      if (fs.existsSync(whisperOut)) {
+        // Convert SRT to karaoke-style ASS for centered display, save as .srt still
+        // (we keep .srt format but pass karaoke style overrides via ffmpeg force_style)
+        fs.renameSync(whisperOut, tokenSrt);
+      }
+
+      transcriptionJobs[token] = {
+        status: 'done',
+        progress: 100,
+        error: null,
+        srtFile: `${token}.srt`
+      };
+      resolve();
+    });
+
+    proc.on('error', err => {
+      const msg = err.code === 'ENOENT'
+        ? 'python3 not found. Make sure Python 3 is installed.'
+        : err.message;
+      transcriptionJobs[token] = { status: 'error', progress: 0, error: msg, srtFile: null };
+      reject(new Error(msg));
+    });
+  });
+}
 
 // ─── Job Routes ───────────────────────────────────────────────────────────────
 app.get('/api/jobs', async (req, res) => {
@@ -149,45 +310,41 @@ app.get('/api/jobs/:id', async (req, res) => {
 
 app.post('/api/generate', async (req, res) => {
   const {
-    batchName,
-    videoFiles,    // selected video filenames
-    imageFiles,    // selected image filenames
-    logoText,
-    logoSubtext,
-    sliceDuration, // seconds per video slice, default 3
-    imageDuration, // seconds per image, default 0.2
+    batchName, videoFiles, imageFiles,
+    logoText, logoSubtext,
+    sliceDuration, imageDuration,
+    resolution,
+    sessionToken,
   } = req.body;
 
   if (!batchName) return res.status(400).json({ error: 'batchName required' });
 
   const jobId = uuidv4();
   const job = await Job.create({
-    id: jobId,
-    batchName,
-    status: 'queued',
-    videoFiles: videoFiles || [],
-    imageFiles: imageFiles || [],
-    logoText: logoText || '',
-    logoSubtext: logoSubtext || ''
+    id: jobId, batchName, status: 'queued',
+    videoFiles: videoFiles || [], imageFiles: imageFiles || [],
+    logoText: logoText || '', logoSubtext: logoSubtext || '',
+    resolution: resolution || '1920x1080',
   });
 
   res.json({ jobId });
 
-  // Run async
   runGeneration(job, {
     batchName,
     videoFiles: videoFiles || [],
     imageFiles: imageFiles || [],
-    logoText: logoText || 'VideoGen',
+    logoText: logoText || '',
     logoSubtext: logoSubtext || '',
-    sliceDuration: sliceDuration || 3,
-    imageDuration: imageDuration || 0.2,
+    sliceDuration: Number(sliceDuration) || 3,
+    imageDuration: Number(imageDuration) || 0.2,
+    resolution: resolution || '1920x1080',
+    sessionToken: sessionToken || null,
   }).catch(e => console.error('Generation error:', e));
 });
 
 // ─── Video Generation ─────────────────────────────────────────────────────────
 async function runGeneration(job, opts) {
-  const { batchName, videoFiles, imageFiles, logoText, logoSubtext, sliceDuration, imageDuration } = opts;
+  const { batchName, videoFiles, imageFiles, logoText, logoSubtext, sliceDuration, imageDuration, resolution, sessionToken } = opts;
   const batchDir = path.join(BATCHES_DIR, batchName);
   const tmpDir = path.join(OUTPUT_DIR, `tmp_${job.id}`);
   fs.mkdirSync(tmpDir, { recursive: true });
@@ -196,16 +353,83 @@ async function runGeneration(job, opts) {
     console.log(`[${job.id}] ${msg}`);
     await Job.updateOne({ id: job.id }, { $push: { log: msg } });
   };
-
-  const setStatus = async (status, progress) => {
-    await Job.updateOne({ id: job.id }, { status, progress });
-  };
+  const setStatus = async (status, progress) => Job.updateOne({ id: job.id }, { status, progress });
 
   try {
     await setStatus('running', 5);
     await addLog('Starting video generation...');
 
-    const parts = []; // final list of video segment paths
+    // ── Resolution ────────────────────────────────────────────────────────────
+    const resConfig = RESOLUTIONS[resolution] || RESOLUTIONS['1920x1080'];
+    const { w: W, h: H } = resConfig;
+    await addLog(`Resolution: ${W}x${H}`);
+
+    // Scale factors for font/logo sizing relative to 1920x1080 baseline
+    const sf = W / 1920;
+    const fontMain = Math.round(52 * sf);
+    const fontSub  = Math.round(30 * sf);
+    const logoSize = Math.round(320 * sf);  // bigger logo
+    const padEdge  = Math.round(24 * sf);
+    const textYMain = Math.round(110 * (H / 1080));
+    const textYSub  = Math.round(58 * (H / 1080));
+
+    // ── Assets ────────────────────────────────────────────────────────────────
+    const logoFiles = fs.existsSync(ASSETS_DIR) ? fs.readdirSync(ASSETS_DIR).filter(f => /^logo\./i.test(f)) : [];
+    const logoPath = logoFiles.length > 0 ? path.join(ASSETS_DIR, logoFiles[0]) : null;
+
+    let srtPath = null;
+    let audioPath = null;
+    if (sessionToken) {
+      const overlayFiles = fs.existsSync(OVERLAYS_DIR) ? fs.readdirSync(OVERLAYS_DIR) : [];
+      const srtFile   = overlayFiles.find(f => f.startsWith(sessionToken) && f.endsWith('.srt'));
+      const audioFile = overlayFiles.find(f => f.startsWith(sessionToken) && /\.(mp3|m4a|wav)$/.test(f));
+      if (srtFile)   { srtPath   = path.join(OVERLAYS_DIR, srtFile);   await addLog(`SRT: ${srtFile}`); }
+      if (audioFile) { audioPath = path.join(OVERLAYS_DIR, audioFile); await addLog(`Audio: ${audioFile}`); }
+    }
+
+    const safeText = (logoText || '').replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+    const safeSub  = (logoSubtext || '').replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+
+    // ── Convert SRT → ASS for true karaoke centering ──────────────────────────
+    // The subtitles filter's force_style can't override Alignment from SRT.
+    // We must write a proper .ass file with Alignment=5 (center screen) baked in.
+    let assPath = null;
+    if (srtPath) {
+      assPath = srtPath.replace(/\.srt$/i, '.ass');
+      const srtContent = fs.readFileSync(srtPath, 'utf8');
+      const assContent = srtToAss(srtContent, fontMain, W, H);
+      fs.writeFileSync(assPath, assContent, 'utf8');
+      await addLog('Converted SRT to ASS (karaoke center style)');
+    }
+
+    // ── Filter builder ────────────────────────────────────────────────────────
+    const buildOverlayFilters = (inputLabel, logoIdx) => {
+      const filters = [];
+      let cur = inputLabel;
+
+      if (logoPath && logoIdx !== null) {
+        filters.push(`[${logoIdx}:v]scale=${logoSize}:-1[logo_s]`);
+        filters.push(`[${cur}][logo_s]overlay=(W-w)/2:H-h-${padEdge}[after_logo]`);
+        cur = 'after_logo';
+      }
+
+      if (assPath) {
+        // ASS subtitles are burned in the final pass (Step 5), not per-slice
+        // because per-slice timestamps reset each loop, breaking subtitle timing
+      } else if (safeText) {
+        let tf = `[${cur}]drawtext=fontsize=${fontMain}:fontcolor=white:x=(w-text_w)/2:y=h-${textYMain}:text='${safeText}':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5`;
+        if (safeSub) {
+          tf += `,drawtext=fontsize=${fontSub}:fontcolor=white@0.9:x=(w-text_w)/2:y=h-${textYSub}:text='${safeSub}':shadowcolor=black@0.8:shadowx=2:shadowy=2`;
+        }
+        tf += '[after_text]';
+        filters.push(tf);
+        cur = 'after_text';
+      }
+
+      return { filters, finalLabel: cur };
+    };
+
+    const parts = [];
 
     // ── Step 1: Video slices ──────────────────────────────────────────────────
     const vDir = path.join(batchDir, 'videos');
@@ -213,40 +437,10 @@ async function runGeneration(job, opts) {
       ? videoFiles.filter(f => fs.existsSync(path.join(vDir, f)))
       : (fs.existsSync(vDir) ? fs.readdirSync(vDir).filter(isVideo) : []);
 
-    // Check for logo here so it's available for both video slices and slideshow
-    const logoFiles = fs.existsSync(ASSETS_DIR) ? fs.readdirSync(ASSETS_DIR).filter(f => /^logo\./i.test(f)) : [];
-    const logoPath = logoFiles.length > 0 ? path.join(ASSETS_DIR, logoFiles[0]) : null;
-
-    const safeText = (logoText || '').replace(/'/g, "\\'").replace(/:/g, "\\:").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
-    const safeSub = (logoSubtext || '').replace(/'/g, "\\'").replace(/:/g, "\\:").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
-
-    // Build a reusable text+logo filter for any video stream labeled [scaled]
-    const buildOverlayFilter = (inputLabel) => {
-      let filters = [];
-      let current = inputLabel;
-
-      if (logoPath) {
-        filters.push(`[logo_in]scale=180:-1[logo_scaled]`);
-        filters.push(`[${current}][logo_scaled]overlay=W-w-24:H-h-24[after_logo]`);
-        current = 'after_logo';
-      }
-
-      if (safeText) {
-        let textF = `[${current}]drawtext=fontsize=52:fontcolor=white:x=(w-text_w)/2:y=h-110:text='${safeText}':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5`;
-        if (safeSub) {
-          textF += `,drawtext=fontsize=30:fontcolor=white@0.9:x=(w-text_w)/2:y=h-58:text='${safeSub}':shadowcolor=black@0.8:shadowx=2:shadowy=2`;
-        }
-        textF += `[after_text]`;
-        filters.push(textF);
-        current = 'after_text';
-      }
-
-      return { filters, finalLabel: current };
-    };
-
     if (selectedVideos.length > 0) {
       await addLog(`Processing ${selectedVideos.length} video(s)...`);
       const shuffled = shuffle([...selectedVideos]);
+
       for (let i = 0; i < shuffled.length; i++) {
         const src = path.join(vDir, shuffled[i]);
         const out = path.join(tmpDir, `vslice_${i}.mp4`);
@@ -255,29 +449,26 @@ async function runGeneration(job, opts) {
         const startTime = Math.random() * maxStart;
         await addLog(`  Slicing ${shuffled[i]} at ${startTime.toFixed(2)}s for ${sliceDuration}s`);
 
-        const scaleFilter = `[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[scaled]`;
-        const { filters: overlayFilters, finalLabel } = buildOverlayFilter('scaled');
-        const filterComplex = [scaleFilter, ...overlayFilters].join(';');
-
         const logoInputArgs = logoPath ? ['-i', logoPath] : [];
-        // Rename logo input label in filter if logo present
-        const finalFilter = logoPath
-          ? filterComplex.replace('[logo_in]', `[${logoInputArgs.length > 0 ? 1 : 0}:v]`)
-          : filterComplex;
+        const logoIdx = logoPath ? 1 : null;
+
+        const scalePart = `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1[scaled]`;
+        const { filters, finalLabel } = buildOverlayFilters('scaled', logoIdx);
+        const filterComplex = [scalePart, ...filters].join(';');
 
         await ffmpegRun([
           '-ss', startTime.toFixed(3),
           '-i', src,
           '-t', String(sliceDuration),
           ...logoInputArgs,
-          '-filter_complex', finalFilter,
+          '-filter_complex', filterComplex,
           '-map', `[${finalLabel}]`,
           '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-          '-an', // mute audio
+          '-an',
           '-y', out
         ]);
         parts.push(out);
-        await setStatus('running', 5 + Math.round((i / selectedVideos.length) * 30));
+        await setStatus('running', 5 + Math.round((i / selectedVideos.length) * 35));
       }
     }
 
@@ -296,78 +487,93 @@ async function runGeneration(job, opts) {
       }
 
       const logoInputArgs = logoPath ? ['-i', logoPath] : [];
-      const logoInputIdx = selectedImages.length;
+      const logoIdx = logoPath ? selectedImages.length : null;
 
-      // Scale + concat all images
       let filterParts = [];
       for (let i = 0; i < selectedImages.length; i++) {
-        filterParts.push(`[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v${i}]`);
+        filterParts.push(`[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,fps=30[v${i}]`);
       }
       const concatInputs = selectedImages.map((_, i) => `[v${i}]`).join('');
       filterParts.push(`${concatInputs}concat=n=${selectedImages.length}:v=1:a=0[slide]`);
 
-      // Logo overlay
-      let current = 'slide';
-      if (logoPath) {
-        filterParts.push(`[${logoInputIdx}:v]scale=180:-1[logo_scaled]`);
-        filterParts.push(`[${current}][logo_scaled]overlay=W-w-24:H-h-24[after_logo]`);
-        current = 'after_logo';
-      }
-
-      // Text overlay
-      if (safeText) {
-        let textF = `[${current}]drawtext=fontsize=52:fontcolor=white:x=(w-text_w)/2:y=h-110:text='${safeText}':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5`;
-        if (safeSub) {
-          textF += `,drawtext=fontsize=30:fontcolor=white@0.9:x=(w-text_w)/2:y=h-58:text='${safeSub}':shadowcolor=black@0.8:shadowx=2:shadowy=2`;
-        }
-        textF += `[final]`;
-        filterParts.push(textF);
-        current = 'final';
-      }
+      const { filters, finalLabel } = buildOverlayFilters('slide', logoIdx);
+      filterParts = [...filterParts, ...filters];
 
       const slideshowOut = path.join(tmpDir, 'slideshow.mp4');
       await ffmpegRun([
         ...imgInputArgs,
         ...logoInputArgs,
         '-filter_complex', filterParts.join(';'),
-        '-map', `[${current}]`,
+        '-map', `[${finalLabel}]`,
         '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
         '-an',
         '-y', slideshowOut
       ]);
       parts.push(slideshowOut);
-      await setStatus('running', 70);
+      await setStatus('running', 75);
       await addLog('Slideshow segment created.');
     }
 
-    if (parts.length === 0) {
-      throw new Error('No video or image files to process. Please add files to the batch first.');
+    if (parts.length === 0) throw new Error('No video or image files to process.');
+
+    // ── Step 3: Concatenate ───────────────────────────────────────────────────
+    await addLog('Concatenating all segments...');
+    await setStatus('running', 82);
+
+    const silentOut = path.join(tmpDir, 'silent_output.mp4');
+    if (parts.length === 1) {
+      fs.copyFileSync(parts[0], silentOut);
+    } else {
+      const listFile = path.join(tmpDir, 'concat_list.txt');
+      fs.writeFileSync(listFile, parts.map(p => `file '${p}'`).join('\n'));
+      await ffmpegRun(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', silentOut]);
     }
 
-    // ── Step 3: Concatenate all parts ─────────────────────────────────────────
-    await addLog('Concatenating all segments...');
-    await setStatus('running', 80);
-
+    // ── Step 4: Loop video to audio length + mix audio ────────────────────────
     const outputFile = `output_${job.id}.mp4`;
     const outputPath = path.join(OUTPUT_DIR, outputFile);
 
-    if (parts.length === 1) {
-      fs.copyFileSync(parts[0], outputPath);
-    } else {
-      // Write concat list
-      const listFile = path.join(tmpDir, 'concat_list.txt');
-      fs.writeFileSync(listFile, parts.map(p => `file '${p}'`).join('\n'));
+    // Intermediate before subtitle burn (only needed if we have ASS)
+    const preSubsPath = assPath
+      ? path.join(tmpDir, 'pre_subs.mp4')
+      : outputPath;
+
+    if (audioPath) {
+      await addLog('Mixing in audio — looping video to match audio length...');
+      await setStatus('running', 88);
       await ffmpegRun([
-        '-f', 'concat', '-safe', '0',
-        '-i', listFile,
-        '-c', 'copy',
+        '-stream_loop', '-1',   // loop video indefinitely
+        '-i', silentOut,
+        '-i', audioPath,
+        '-map', '0:v',
+        '-map', '1:a',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:a', 'aac', '-b:a', '192k',
+        '-shortest',            // stop when audio ends
+        '-y', preSubsPath
+      ]);
+    } else {
+      // No audio — just copy silent output to pre_subs stage
+      fs.copyFileSync(silentOut, preSubsPath);
+      if (!assPath) fs.copyFileSync(silentOut, outputPath);
+    }
+
+    // ── Step 5: Burn ASS subtitles onto the final full-length video ───────────
+    // Must happen AFTER looping so timestamps are continuous 0→end, matching SRT
+    if (assPath) {
+      await addLog('Burning karaoke subtitles onto final video...');
+      await setStatus('running', 95);
+      const safeAss = assPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+      await ffmpegRun([
+        '-i', preSubsPath,
+        '-vf', `ass='${safeAss}'`,
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:a', 'copy',
         '-y', outputPath
       ]);
     }
 
-    // Cleanup tmp
     fs.rmSync(tmpDir, { recursive: true, force: true });
-
     await setStatus('done', 100);
     await Job.updateOne({ id: job.id }, { outputFile });
     await addLog(`Done! Output: ${outputFile}`);
@@ -381,21 +587,76 @@ async function runGeneration(job, opts) {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function isVideo(f) { return /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(f); }
 function isImage(f) { return /\.(jpg|jpeg|png|webp|bmp|tiff)$/i.test(f); }
-function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// Parse SRT timestamp "00:00:05,240" → seconds
+function srtTimeToSeconds(t) {
+  const [hms, ms] = t.trim().split(',');
+  const [h, m, s] = hms.split(':').map(Number);
+  return h * 3600 + m * 60 + s + Number(ms) / 1000;
+}
+
+// Seconds → ASS timestamp "0:00:05.24"
+function secondsToAssTime(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = (secs % 60).toFixed(2).padStart(5, '0');
+  return `${h}:${String(m).padStart(2, '0')}:${s}`;
+}
+
+// Get the end time of the last subtitle entry in seconds
+function getSrtDuration(srtContent) {
+  const matches = [...srtContent.matchAll(/(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})/g)];
+  if (!matches.length) return 0;
+  const last = matches[matches.length - 1];
+  return srtTimeToSeconds(last[2]); // end timestamp of last cue
+}
+
+// Convert SRT content to ASS with karaoke center styling baked in
+function srtToAss(srtContent, fontSize, W, H) {
+  const header = `[Script Info]
+ScriptType: v4.00+
+PlayResX: ${W}
+PlayResY: ${H}
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Karaoke,Arial,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,5,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+  const blocks = srtContent.trim().split(/\n\n+/);
+  const events = blocks.map(block => {
+    const lines = block.split('\n');
+    // lines[0] = index, lines[1] = timestamps, lines[2+] = text
+    const timeLine = lines[1] || '';
+    const match = timeLine.match(/(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})/);
+    if (!match) return null;
+    const start = secondsToAssTime(srtTimeToSeconds(match[1]));
+    const end   = secondsToAssTime(srtTimeToSeconds(match[2]));
+    const text  = lines.slice(2).join('\\N').replace(/<[^>]+>/g, ''); // strip HTML tags
+    return `Dialogue: 0,${start},${end},Karaoke,,0,0,0,,${text}`;
+  }).filter(Boolean);
+
+  return header + events.join('\n') + '\n';
+}
 
 function getVideoDuration(filePath) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('ffprobe', [
-      '-v', 'error', '-show_entries', 'format=duration',
-      '-of', 'default=noprint_wrappers=1:nokey=1', filePath
-    ]);
+  return new Promise((resolve) => {
+    const proc = spawn('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath]);
     let out = '';
     proc.stdout.on('data', d => out += d);
-    proc.on('close', code => {
-      const dur = parseFloat(out.trim());
-      resolve(isNaN(dur) ? 10 : dur);
-    });
-    proc.on('error', reject);
+    proc.on('close', () => resolve(isNaN(parseFloat(out)) ? 10 : parseFloat(out)));
+    proc.on('error', () => resolve(10));
   });
 }
 
@@ -406,15 +667,74 @@ function ffmpegRun(args) {
     let errOut = '';
     proc.stderr.on('data', d => { errOut += d.toString(); });
     proc.on('close', code => {
-      if (code !== 0) {
-        reject(new Error(`ffmpeg exited ${code}: ${errOut.slice(-500)}`));
-      } else {
-        resolve();
-      }
+      if (code !== 0) reject(new Error(`ffmpeg exited ${code}: ${errOut.slice(-600)}`));
+      else resolve();
     });
-    proc.on('error', err => reject(new Error(`ffmpeg not found: ${err.message}. Make sure ffmpeg is installed.`)));
+    proc.on('error', err => reject(new Error(`ffmpeg not found: ${err.message}`)));
   });
 }
+
+// ─── Metadata Generation (Ollama / Llama2) ───────────────────────────────────
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
+
+app.get('/api/ollama/status', async (req, res) => {
+  try {
+    const r = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    if (!r.ok) return res.json({ running: false });
+    const data = await r.json();
+    const models = (data.models || []).map(m => m.name);
+    res.json({ running: true, models, hasLlama: models.some(m => m.includes('llama')) });
+  } catch {
+    res.json({ running: false, models: [], hasLlama: false });
+  }
+});
+
+app.post('/api/metadata/generate', async (req, res) => {
+  const { platform, topic, tone, extraContext, model } = req.body;
+  if (!platform || !topic) return res.status(400).json({ error: 'platform and topic required' });
+  const selectedModel = model || 'llama2';
+  const platformPrompts = {
+    instagram: `You are a social media expert specializing in Instagram content.
+Generate Instagram post metadata for a video about: "${topic}"
+Tone: ${tone || 'engaging and casual'}
+${extraContext ? `Extra context: ${extraContext}` : ''}
+Respond ONLY with valid JSON in this exact format, no other text:
+{
+  "title": "A catchy Instagram caption title (max 10 words)",
+  "caption": "Full Instagram caption with emojis, engaging text (150-200 chars)",
+  "hashtags": ["hashtag1","hashtag2","hashtag3","hashtag4","hashtag5","hashtag6","hashtag7","hashtag8","hashtag9","hashtag10"]
+}`,
+    youtube: `You are a YouTube SEO and content expert.
+Generate YouTube video metadata for a video about: "${topic}"
+Tone: ${tone || 'professional and informative'}
+${extraContext ? `Extra context: ${extraContext}` : ''}
+Respond ONLY with valid JSON in this exact format, no other text:
+{
+  "title": "SEO-optimized YouTube title (max 70 chars, include keywords)",
+  "description": "Full YouTube description with timestamps placeholder, keywords, and call to action (250-350 chars)",
+  "tags": ["tag1","tag2","tag3","tag4","tag5","tag6","tag7","tag8","tag9","tag10"],
+  "hashtags": ["hashtag1","hashtag2","hashtag3"]
+}`
+  };
+  const prompt = platformPrompts[platform];
+  if (!prompt) return res.status(400).json({ error: 'unsupported platform' });
+  try {
+    const ollamaRes = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: selectedModel, prompt, stream: false, options: { temperature: 0.7, top_p: 0.9 } }),
+      signal: AbortSignal.timeout(120000)
+    });
+    if (!ollamaRes.ok) return res.status(500).json({ error: `Ollama error: ${await ollamaRes.text()}` });
+    const data = await ollamaRes.json();
+    const jsonMatch = (data.response || '').match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return res.status(500).json({ error: 'Could not parse metadata from model response' });
+    res.json({ platform, metadata: JSON.parse(jsonMatch[0]), model: selectedModel });
+  } catch (e) {
+    if (e.name === 'TimeoutError') return res.status(504).json({ error: 'Ollama timed out.' });
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5001;

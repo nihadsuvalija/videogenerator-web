@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Clapperboard, Layers, History, Zap } from 'lucide-react';
+import { Clapperboard, Layers, History, Zap, Sparkles } from 'lucide-react';
 import BatchManager from './components/BatchManager';
 import GeneratePanel from './components/GeneratePanel';
 import JobHistory from './components/JobHistory';
+import MetadataGenerator from './components/MetadataGenerator';
 import { cn } from './lib/utils';
 
 const API = 'http://localhost:5001';
@@ -10,12 +11,18 @@ const API = 'http://localhost:5001';
 export default function App() {
   const [batches, setBatches] = useState([]);
   const [selectedBatch, setSelectedBatch] = useState(null);
-  const [activeTab, setActiveTab] = useState('generate'); // 'generate' | 'history'
+  const [activeTab, setActiveTab] = useState('generate');
+  const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
 
   const loadBatches = async () => {
     const res = await fetch(`${API}/api/batches`);
     const data = await res.json();
     setBatches(data);
+  };
+
+  const handleFilesChanged = () => {
+    setFileRefreshTrigger(n => n + 1);
+    loadBatches(); // also refresh batch counts in sidebar
   };
 
   useEffect(() => { loadBatches(); }, []);
@@ -40,6 +47,9 @@ export default function App() {
             <TabButton active={activeTab === 'generate'} onClick={() => setActiveTab('generate')}>
               <Zap className="w-3.5 h-3.5" /> Generate
             </TabButton>
+            <TabButton active={activeTab === 'metadata'} onClick={() => setActiveTab('metadata')}>
+              <Sparkles className="w-3.5 h-3.5" /> Metadata
+            </TabButton>
             <TabButton active={activeTab === 'history'} onClick={() => setActiveTab('history')}>
               <History className="w-3.5 h-3.5" /> History
             </TabButton>
@@ -61,6 +71,7 @@ export default function App() {
                 onRefresh={loadBatches}
                 onSelectBatch={setSelectedBatch}
                 selectedBatch={selectedBatch}
+                onFilesChanged={handleFilesChanged}
               />
             </div>
 
@@ -70,8 +81,18 @@ export default function App() {
                 <Clapperboard className="w-4 h-4 text-primary" />
                 <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Generate</h2>
               </div>
-              <GeneratePanel selectedBatch={selectedBatch} />
+              <GeneratePanel selectedBatch={selectedBatch} fileRefreshTrigger={fileRefreshTrigger} />
             </div>
+          </div>
+        )}
+
+        {activeTab === 'metadata' && (
+          <div className="max-w-2xl mx-auto">
+            <div className="flex items-center gap-2 mb-4">
+              <Sparkles className="w-4 h-4 text-primary" />
+              <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">AI Metadata</h2>
+            </div>
+            <MetadataGenerator />
           </div>
         )}
 

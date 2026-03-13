@@ -6,7 +6,7 @@ import { cn } from '../lib/utils';
 
 const API = 'http://localhost:5001';
 
-export default function BatchManager({ batches, onRefresh, onSelectBatch, selectedBatch }) {
+export default function BatchManager({ batches, onRefresh, onSelectBatch, selectedBatch, onFilesChanged }) {
   const [newBatchName, setNewBatchName] = useState('');
   const [creating, setCreating] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -59,6 +59,7 @@ export default function BatchManager({ batches, onRefresh, onSelectBatch, select
         body: formData
       });
       loadBatchFiles(selectedBatch);
+      onFilesChanged?.();
     } finally {
       setUploading(false);
     }
@@ -68,6 +69,7 @@ export default function BatchManager({ batches, onRefresh, onSelectBatch, select
     if (!selectedBatch) return;
     await fetch(`${API}/api/batches/${selectedBatch}/${type}/${encodeURIComponent(filename)}`, { method: 'DELETE' });
     loadBatchFiles(selectedBatch);
+    onFilesChanged?.();
   };
 
   const handleDrop = (e, type) => {
