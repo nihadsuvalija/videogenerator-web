@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import LyricsPanel from './LyricsPanel';
 import {
   Clapperboard, Play, Upload, RefreshCw, Check, AlertCircle,
-  Download, Trash2, Music, Monitor, FileText
+  Download, Trash2, Music, Monitor, FileText, Sliders, Lock, X
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -13,7 +13,6 @@ import { cn } from '../lib/utils';
 
 const API = 'http://localhost:5001';
 
-// Stable session token per browser session
 const SESSION_TOKEN = (() => {
   let t = sessionStorage.getItem('vg_session');
   if (!t) { t = Math.random().toString(36).slice(2) + Date.now().toString(36); sessionStorage.setItem('vg_session', t); }
@@ -28,47 +27,88 @@ const RESOLUTION_ICONS = {
   '2160x3840': '📲',
 };
 
-export default function GeneratePanel({ selectedBatch, fileRefreshTrigger }) {
-  const [logoText, setLogoText]           = useState('');
-  const [logoSubtext, setLogoSubtext]     = useState('');
-  const [sliceDuration, setSliceDuration] = useState(3);
-  const [imageDuration, setImageDuration] = useState(0.2);
-  const [resolution, setResolution]       = useState('1920x1080');
-  const [resolutions, setResolutions]     = useState([]);
-  const [batchFiles, setBatchFiles]       = useState({ videos: [], images: [] });
+export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activePreset, onPresetUpdated, onClearPreset }) {
+  const [logoText, setLogoText]             = useState('');
+  const [logoSubtext, setLogoSubtext]       = useState('');
+  const [sliceDuration, setSliceDuration]   = useState(3);
+  const [imageDuration, setImageDuration]   = useState(0.2);
+  const [resolution, setResolution]         = useState('1920x1080');
+  const [resolutions, setResolutions]       = useState([]);
+  const [batchFiles, setBatchFiles]         = useState({ videos: [], images: [] });
   const [selectedVideos, setSelectedVideos] = useState([]);
   const [selectedImages, setSelectedImages] = useState([]);
-  const [logoFile, setLogoFile]           = useState(null);
-  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [logoFile, setLogoFile]             = useState(null);
+  const [uploadingLogo, setUploadingLogo]   = useState(false);
 
-  // SRT + MP3
-  const [srtFile, setSrtFile]             = useState(null);
-  const [audioFile, setAudioFile]         = useState(null);
-  const [uploadingSrt, setUploadingSrt]   = useState(false);
+  const [srtFile, setSrtFile]               = useState(null);
+  const [audioFile, setAudioFile]           = useState(null);
+  const [uploadingSrt, setUploadingSrt]     = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
 
-  const [generating, setGenerating]       = useState(false);
-  const [jobId, setJobId]                 = useState(null);
-  const [job, setJob]                     = useState(null);
+  const [generating, setGenerating]         = useState(false);
+  const [jobId, setJobId]                   = useState(null);
+  const [job, setJob]                       = useState(null);
   const logoInputRef  = useRef();
   const srtInputRef   = useRef();
   const audioInputRef = useRef();
   const pollRef       = useRef();
+
+  const locked = activePreset?.locked ?? false;
+
+  // When a preset is applied, populate all fields from it
+  useEffect(() => {
+    if (!activePreset) return;
+    setResolution(activePreset.resolution || '1920x1080');
+    setSliceDuration(activePreset.sliceDuration ?? 3);
+    setImageDuration(activePreset.imageDuration ?? 0.2);
+    setLogoText(activePreset.logoText || '');
+    setLogoSubtext(activePreset.logoSubtext || '');
+    // Only override file selections if preset has them
+    if (activePreset.selectedVideos?.length)  setSelectedVideos(activePreset.selectedVideos);
+    if (activePreset.selectedImages?.length)  setSelectedImages(activePreset.selectedImages);
+  }, [activePreset?.id]); // re-run only when a different preset is applied
+
+  // Auto-save current field values back to active preset (debounced)
+  const saveBackRef = useRef(null);
+  const saveBackToPreset = (patch) => {
+    if (!activePreset || locked) return;
+    if (saveBackRef.current) clearTimeout(saveBackRef.current);
+    saveBackRef.current = setTimeout(async () => {
+      await fetch(`${API}/api/presets/${activePreset.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      });
+      onPresetUpdated?.(patch);
+    }, 800);
+  };
+
+  // Wrapped setters that also save back to preset
+  const setAndSaveResolution = (v) => { setResolution(v); saveBackToPreset({ resolution: v }); };
+  const setAndSaveSlice = (v) => { setSliceDuration(v); saveBackToPreset({ sliceDuration: Number(v) }); };
+  const setAndSaveImageDur = (v) => { setImageDuration(v); saveBackToPreset({ imageDuration: Number(v) }); };
+  const setAndSaveLogoText = (v) => { setLogoText(v); saveBackToPreset({ logoText: v }); };
+  const setAndSaveLogoSubtext = (v) => { setLogoSubtext(v); saveBackToPreset({ logoSubtext: v }); };
+  const setAndSaveVideos = (v) => { setSelectedVideos(v); saveBackToPreset({ selectedVideos: v }); };
+  const setAndSaveImages = (v) => { setSelectedImages(v); saveBackToPreset({ selectedImages: v }); };
 
   // Load resolutions
   useEffect(() => {
     fetch(`${API}/api/resolutions`).then(r => r.json()).then(setResolutions).catch(() => {});
   }, []);
 
-  // Load batch files when batch changes
+  // Load batch files when batch or trigger changes
   useEffect(() => {
     if (selectedBatch) {
       fetch(`${API}/api/batches/${selectedBatch}/files`)
         .then(r => r.json())
         .then(data => {
           setBatchFiles(data);
-          setSelectedVideos(data.videos);
-          setSelectedImages(data.images);
+          // Only auto-select all if no preset is active
+          if (!activePreset) {
+            setSelectedVideos(data.videos);
+            setSelectedImages(data.images);
+          }
         });
     }
   }, [selectedBatch, fileRefreshTrigger]);
@@ -166,6 +206,33 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger }) {
 
   return (
     <div className="space-y-5">
+      {/* Active preset banner */}
+      {activePreset && (
+        <div className={cn(
+          "rounded-lg border px-4 py-3 flex items-center justify-between",
+          locked
+            ? "border-yellow-500/30 bg-yellow-500/10"
+            : "border-primary/30 bg-primary/10"
+        )}>
+          <div className="flex items-center gap-2">
+            {locked
+              ? <Lock className="w-3.5 h-3.5 text-yellow-400" />
+              : <Sliders className="w-3.5 h-3.5 text-primary" />
+            }
+            <span className="text-sm font-semibold">{activePreset.name}</span>
+            <Badge className={cn("text-xs", locked
+              ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
+              : "bg-primary/20 text-primary border-primary/30"
+            )}>
+              {locked ? 'Locked' : 'Auto-saving'}
+            </Badge>
+          </div>
+          <button onClick={onClearPreset} className="text-muted-foreground hover:text-foreground transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {!selectedBatch ? (
         <div className="rounded-xl border border-dashed border-border p-10 text-center text-muted-foreground">
           <Clapperboard className="w-10 h-10 mx-auto mb-3 opacity-30" />
@@ -186,15 +253,21 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger }) {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <Label className="text-xs uppercase tracking-widest text-muted-foreground">Video Pool</Label>
-                    <div className="flex gap-2">
-                      <button onClick={() => setSelectedVideos(batchFiles.videos)} className="text-xs text-primary hover:underline">All</button>
-                      <span className="text-muted-foreground text-xs">·</span>
-                      <button onClick={() => setSelectedVideos([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
-                    </div>
+                    {!locked && (
+                      <div className="flex gap-2">
+                        <button onClick={() => setAndSaveVideos(batchFiles.videos)} className="text-xs text-primary hover:underline">All</button>
+                        <span className="text-muted-foreground text-xs">·</span>
+                        <button onClick={() => setAndSaveVideos([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
+                      </div>
+                    )}
                   </div>
                   <div className="grid gap-1">
                     {batchFiles.videos.map(f => (
-                      <FileToggle key={f} name={f} selected={selectedVideos.includes(f)} onToggle={() => toggleVideo(f)} color="blue" />
+                      <FileToggle key={f} name={f} selected={selectedVideos.includes(f)}
+                        onToggle={() => !locked && setAndSaveVideos(
+                          selectedVideos.includes(f) ? selectedVideos.filter(x => x !== f) : [...selectedVideos, f]
+                        )}
+                        color="blue" locked={locked} />
                     ))}
                   </div>
                 </div>
@@ -204,15 +277,21 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger }) {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <Label className="text-xs uppercase tracking-widest text-muted-foreground">Image Pool</Label>
-                    <div className="flex gap-2">
-                      <button onClick={() => setSelectedImages(batchFiles.images)} className="text-xs text-primary hover:underline">All</button>
-                      <span className="text-muted-foreground text-xs">·</span>
-                      <button onClick={() => setSelectedImages([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
-                    </div>
+                    {!locked && (
+                      <div className="flex gap-2">
+                        <button onClick={() => setAndSaveImages(batchFiles.images)} className="text-xs text-primary hover:underline">All</button>
+                        <span className="text-muted-foreground text-xs">·</span>
+                        <button onClick={() => setAndSaveImages([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
+                      </div>
+                    )}
                   </div>
                   <div className="grid gap-1">
                     {batchFiles.images.map(f => (
-                      <FileToggle key={f} name={f} selected={selectedImages.includes(f)} onToggle={() => toggleImage(f)} color="purple" />
+                      <FileToggle key={f} name={f} selected={selectedImages.includes(f)}
+                        onToggle={() => !locked && setAndSaveImages(
+                          selectedImages.includes(f) ? selectedImages.filter(x => x !== f) : [...selectedImages, f]
+                        )}
+                        color="purple" locked={locked} />
                     ))}
                   </div>
                 </div>
@@ -237,12 +316,14 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger }) {
                 {resolutions.map(r => (
                   <button
                     key={r.key}
-                    onClick={() => setResolution(r.key)}
+                    onClick={() => !locked && setAndSaveResolution(r.key)}
+                    disabled={locked}
                     className={cn(
                       "flex items-center gap-3 px-4 py-3 rounded-lg border text-left transition-all",
                       resolution === r.key
                         ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border hover:border-border/80 text-muted-foreground hover:text-foreground"
+                        : "border-border hover:border-border/80 text-muted-foreground hover:text-foreground",
+                      locked && "opacity-60 cursor-not-allowed"
                     )}
                   >
                     <span className="text-xl">{RESOLUTION_ICONS[r.key]}</span>
@@ -266,17 +347,21 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger }) {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label className="text-xs">Video slice duration (sec)</Label>
-                  <Input type="number" min="1" max="60" step="1" value={sliceDuration} onChange={e => setSliceDuration(e.target.value)} />
+                  <Input type="number" min="1" max="60" step="1" value={sliceDuration}
+                    disabled={locked}
+                    onChange={e => setAndSaveSlice(e.target.value)} />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Image duration (sec)</Label>
-                  <Input type="number" min="0.1" max="10" step="0.1" value={imageDuration} onChange={e => setImageDuration(e.target.value)} />
+                  <Input type="number" min="0.1" max="10" step="0.1" value={imageDuration}
+                    disabled={locked}
+                    onChange={e => setAndSaveImageDur(e.target.value)} />
                 </div>
               </div>
 
               <Separator />
 
-              {/* Text overlays — only shown if no SRT uploaded */}
+              {/* Text overlays */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs uppercase tracking-widest text-muted-foreground">Text Overlay</Label>
@@ -290,16 +375,16 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger }) {
                   <Input
                     placeholder="Title text (e.g. My Brand)"
                     value={logoText}
-                    onChange={e => setLogoText(e.target.value)}
-                    disabled={!!srtFile}
-                    className={srtFile ? 'opacity-40' : ''}
+                    onChange={e => setAndSaveLogoText(e.target.value)}
+                    disabled={!!srtFile || locked}
+                    className={(srtFile || locked) ? 'opacity-40' : ''}
                   />
                   <Input
                     placeholder="Subtitle text (e.g. @handle)"
                     value={logoSubtext}
-                    onChange={e => setLogoSubtext(e.target.value)}
-                    disabled={!!srtFile}
-                    className={srtFile ? 'opacity-40' : ''}
+                    onChange={e => setAndSaveLogoSubtext(e.target.value)}
+                    disabled={!!srtFile || locked}
+                    className={(srtFile || locked) ? 'opacity-40' : ''}
                   />
                 </div>
               </div>
@@ -412,7 +497,7 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger }) {
   );
 }
 
-function FileToggle({ name, selected, onToggle, color }) {
+function FileToggle({ name, selected, onToggle, color, locked }) {
   const colorMap = {
     blue: 'border-blue-500/40 bg-blue-500/10 text-blue-300',
     purple: 'border-purple-500/40 bg-purple-500/10 text-purple-300',
@@ -420,9 +505,11 @@ function FileToggle({ name, selected, onToggle, color }) {
   return (
     <button
       onClick={onToggle}
+      disabled={locked}
       className={cn(
         "flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-all text-left w-full",
-        selected ? colorMap[color] : "border-border bg-transparent text-muted-foreground hover:border-border/80"
+        selected ? colorMap[color] : "border-border bg-transparent text-muted-foreground hover:border-border/80",
+        locked && "opacity-60 cursor-not-allowed"
       )}
     >
       <div className={cn("w-3.5 h-3.5 rounded-sm border flex items-center justify-center flex-shrink-0",

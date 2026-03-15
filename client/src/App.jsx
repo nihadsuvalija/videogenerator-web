@@ -1,35 +1,52 @@
 import React, { useState, useEffect } from 'react';
-import { Clapperboard, Layers, History, Zap, Sparkles } from 'lucide-react';
+import { Clapperboard, Layers, History, Zap, Sparkles, Sliders, Film } from 'lucide-react';
 import BatchManager from './components/BatchManager';
 import GeneratePanel from './components/GeneratePanel';
 import JobHistory from './components/JobHistory';
 import MetadataGenerator from './components/MetadataGenerator';
+import PresetsPanel from './components/PresetsPanel';
+import VideoEditor from './components/VideoEditor';
 import { cn } from './lib/utils';
 
 const API = 'http://localhost:5001';
 
 export default function App() {
-  const [batches, setBatches] = useState([]);
-  const [selectedBatch, setSelectedBatch] = useState(null);
-  const [activeTab, setActiveTab] = useState('generate');
+  const [batches, setBatches]                       = useState([]);
+  const [selectedBatch, setSelectedBatch]           = useState(null);
+  const [activeTab, setActiveTab]                   = useState('generate');
   const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
+  const [activePreset, setActivePreset]             = useState(null);
+  const [editorJobId, setEditorJobId]               = useState(null);
 
   const loadBatches = async () => {
     const res = await fetch(`${API}/api/batches`);
-    const data = await res.json();
-    setBatches(data);
+    setBatches(await res.json());
   };
 
   const handleFilesChanged = () => {
     setFileRefreshTrigger(n => n + 1);
-    loadBatches(); // also refresh batch counts in sidebar
+    loadBatches();
+  };
+
+  const handleApplyPreset = (preset) => {
+    setActivePreset(preset);
+    setActiveTab('generate');
+  };
+
+  const handlePresetUpdated = (patch) => {
+    if (!activePreset) return;
+    setActivePreset(prev => ({ ...prev, ...patch }));
+  };
+
+  const handleOpenEditor = (jobId) => {
+    setEditorJobId(jobId);
+    setActiveTab('editor');
   };
 
   useEffect(() => { loadBatches(); }, []);
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="border-b border-border sticky top-0 z-50 bg-background/80 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -47,6 +64,13 @@ export default function App() {
             <TabButton active={activeTab === 'generate'} onClick={() => setActiveTab('generate')}>
               <Zap className="w-3.5 h-3.5" /> Generate
             </TabButton>
+            <TabButton active={activeTab === 'editor'} onClick={() => setActiveTab('editor')}>
+              <Film className="w-3.5 h-3.5" /> Editor
+              {editorJobId && <span className="w-1.5 h-1.5 rounded-full bg-primary ml-0.5" />}
+            </TabButton>
+            <TabButton active={activeTab === 'presets'} onClick={() => setActiveTab('presets')}>
+              <Sliders className="w-3.5 h-3.5" /> Presets
+            </TabButton>
             <TabButton active={activeTab === 'metadata'} onClick={() => setActiveTab('metadata')}>
               <Sparkles className="w-3.5 h-3.5" /> Metadata
             </TabButton>
@@ -60,7 +84,6 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-6 py-8">
         {activeTab === 'generate' && (
           <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-6">
-            {/* Left: Batch manager */}
             <div>
               <div className="flex items-center gap-2 mb-4">
                 <Layers className="w-4 h-4 text-primary" />
@@ -74,15 +97,56 @@ export default function App() {
                 onFilesChanged={handleFilesChanged}
               />
             </div>
-
-            {/* Right: Generate config */}
             <div>
               <div className="flex items-center gap-2 mb-4">
                 <Clapperboard className="w-4 h-4 text-primary" />
                 <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Generate</h2>
               </div>
-              <GeneratePanel selectedBatch={selectedBatch} fileRefreshTrigger={fileRefreshTrigger} />
+              <GeneratePanel
+                selectedBatch={selectedBatch}
+                fileRefreshTrigger={fileRefreshTrigger}
+                activePreset={activePreset}
+                onPresetUpdated={handlePresetUpdated}
+                onClearPreset={() => setActivePreset(null)}
+              />
             </div>
+          </div>
+        )}
+
+        {activeTab === 'editor' && (
+          <div>
+            <div className="flex items-center gap-2 mb-6">
+              <Film className="w-4 h-4 text-primary" />
+              <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Video Editor</h2>
+            </div>
+            {editorJobId ? (
+              <VideoEditor
+                jobId={editorJobId}
+                onBack={() => { setEditorJobId(null); setActiveTab('history'); }}
+              />
+            ) : (
+              <div className="text-center py-20 text-muted-foreground">
+                <Film className="w-12 h-12 mx-auto mb-4 opacity-20" />
+                <p className="text-sm">No video loaded.</p>
+                <p className="text-xs mt-1 opacity-60">Go to History and click <strong>Edit</strong> on a completed job.</p>
+                <button
+                  onClick={() => setActiveTab('history')}
+                  className="mt-4 text-sm text-primary hover:underline"
+                >
+                  Open History →
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'presets' && (
+          <div className="max-w-4xl mx-auto">
+            <div className="flex items-center gap-2 mb-4">
+              <Sliders className="w-4 h-4 text-primary" />
+              <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Presets</h2>
+            </div>
+            <PresetsPanel onApplyPreset={handleApplyPreset} />
           </div>
         )}
 
@@ -102,12 +166,11 @@ export default function App() {
               <History className="w-4 h-4 text-primary" />
               <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Job History</h2>
             </div>
-            <JobHistory />
+            <JobHistory onOpenEditor={handleOpenEditor} />
           </div>
         )}
       </main>
 
-      {/* Subtle bottom accent */}
       <div className="fixed bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent pointer-events-none" />
     </div>
   );
