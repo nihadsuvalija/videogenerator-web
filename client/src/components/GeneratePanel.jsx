@@ -27,7 +27,7 @@ const RESOLUTION_ICONS = {
   '2160x3840': '📲',
 };
 
-export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activePreset, onPresetUpdated, onClearPreset, onJobComplete, presets, onApplyPreset, onOpenBatches }) {
+export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activePreset, onPresetUpdated, onClearPreset, onJobComplete, presets, onApplyPreset, onOpenBatches, replicateParams, onReplicateConsumed }) {
   const [logoText, setLogoText]             = useState('');
   const [logoSubtext, setLogoSubtext]       = useState('');
   const [textMaxChars, setTextMaxChars]     = useState('20');
@@ -71,6 +71,23 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
     setVideoCount(activePreset.videoCount ?? 1);
     // File selections are batch-specific — not loaded from preset
   }, [activePreset?.id]); // re-run only when a different preset is applied
+
+  // Apply replicated params from home page dashboard
+  useEffect(() => {
+    if (!replicateParams) return;
+    const p = replicateParams;
+    if (p.resolution)        setResolution(p.resolution);
+    if (p.sliceDuration)     setSliceDuration(String(p.sliceDuration));
+    if (p.imageDuration)     setImageDuration(String(p.imageDuration));
+    if (p.logoText != null)  setLogoText(p.logoText);
+    if (p.logoSubtext != null) setLogoSubtext(p.logoSubtext);
+    if (p.textMaxChars)      setTextMaxChars(String(p.textMaxChars));
+    if (p.preferredDuration) setPreferredDuration(String(p.preferredDuration));
+    if (p.videoCount)        setVideoCount(p.videoCount);
+    if (p.videoFiles)        setSelectedVideos(p.videoFiles);
+    if (p.imageFiles)        setSelectedImages(p.imageFiles);
+    onReplicateConsumed?.();
+  }, [replicateParams]);
 
   // Auto-save current field values back to active preset (debounced)
   const saveBackRef = useRef(null);

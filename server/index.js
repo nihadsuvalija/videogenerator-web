@@ -6,6 +6,13 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const { spawn } = require('child_process');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'videogen-dev-secret-change-in-production';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 const app = express();
 app.use(cors());
@@ -60,9 +67,101 @@ const JobSchema = new mongoose.Schema({
   resolution:  String,
   clips: [{ id: String, clipType: String, src: String, startTime: Number, clipDuration: Number, trimIn: Number, trimOut: Number, order: Number }],
   annotations: [{ id: String, text: String, startTime: Number, endTime: Number, x: Number, y: Number }],
+  userId:          { type: String, default: null },
+  presetId:        { type: String, default: null },
+  presetName:      { type: String, default: null },
+  generationParams: { type: mongoose.Schema.Types.Mixed, default: null },
   createdAt:   { type: Date, default: Date.now }
 });
 const Job = mongoose.model('Job', JobSchema);
+
+// ─── User Schema ──────────────────────────────────────────────────────────────
+const UserSchema = new mongoose.Schema({
+  id:        { type: String, default: uuidv4 },
+  name:      { type: String, required: true },
+  email:     { type: String, required: true, unique: true, lowercase: true, trim: true },
+  password:  { type: String },  // null for Google-only accounts
+  googleId:  { type: String },
+  avatar:    { type: String },
+  createdAt: { type: Date, default: Date.now },
+});
+const User = mongoose.model('User', UserSchema);
+
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+const signToken = (user) => jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
+
+const requireAuth = async (req, res, next) => {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const payload = jwt.verify(header.slice(7), JWT_SECRET);
+    const user = await User.findOne({ id: payload.id });
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    req.user = user;
+    next();
+  } catch { res.status(401).json({ error: 'Invalid token' }); }
+};
+
+// ─── Auth Routes ──────────────────────────────────────────────────────────────
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const existing = await User.findOne({ email: email.toLowerCase().trim() });
+    if (existing) return res.status(400).json({ error: 'Email already in use' });
+    const hash = await bcrypt.hash(password, 12);
+    const user = await User.create({ name: name.trim(), email: email.toLowerCase().trim(), password: hash });
+    const token = signToken(user);
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user || !user.password) return res.status(400).json({ error: 'Invalid email or password' });
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) return res.status(400).json({ error: 'Invalid email or password' });
+    const token = signToken(user);
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ error: 'Google credential required' });
+    if (!GOOGLE_CLIENT_ID) return res.status(500).json({ error: 'Google OAuth not configured on server' });
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+    const payload = ticket.getPayload();
+    let user = await User.findOne({ googleId: payload.sub });
+    if (!user) {
+      user = await User.findOne({ email: payload.email });
+      if (user) {
+        user.googleId = payload.sub;
+        user.avatar = user.avatar || payload.picture;
+        await user.save();
+      } else {
+        user = await User.create({
+          name: payload.name,
+          email: payload.email,
+          googleId: payload.sub,
+          avatar: payload.picture,
+        });
+      }
+    }
+    const token = signToken(user);
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  const u = req.user;
+  res.json({ id: u.id, name: u.name, email: u.email, avatar: u.avatar });
+});
 
 const PresetSchema = new mongoose.Schema({
   id:             { type: String, default: uuidv4 },
@@ -106,6 +205,14 @@ app.get('/api/presets', async (req, res) => {
   try {
     const presets = await Preset.find().sort({ createdAt: -1 });
     res.json(presets);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/presets/:id', async (req, res) => {
+  try {
+    const preset = await Preset.findOne({ id: req.params.id });
+    if (!preset) return res.status(404).json({ error: 'not found' });
+    res.json(preset);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -437,8 +544,12 @@ async function runWhisper(token, audioPath, model) {
 
 // ─── Job Routes ───────────────────────────────────────────────────────────────
 app.get('/api/jobs', async (req, res) => {
-  const jobs = await Job.find().sort({ createdAt: -1 }).limit(50);
-  res.json(jobs);
+  const page  = Math.max(1, parseInt(req.query.page)  || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 10);
+  const skip  = (page - 1) * limit;
+  const total = await Job.countDocuments();
+  const jobs  = await Job.find().sort({ createdAt: -1 }).skip(skip).limit(limit);
+  res.json({ jobs, total, page, limit, pages: Math.ceil(total / limit) });
 });
 
 app.get('/api/jobs/:id', async (req, res) => {
@@ -470,11 +581,23 @@ app.post('/api/generate', async (req, res) => {
   }
 
   const jobId = uuidv4();
+  let presetName = null;
+  if (presetId) {
+    const p = await Preset.findOne({ id: presetId });
+    if (p) presetName = p.name;
+  }
   const job = await Job.create({
     id: jobId, batchName, status: 'queued',
     videoFiles: videoFiles || [], imageFiles: imageFiles || [],
     logoText: logoText || '', logoSubtext: logoSubtext || '',
     resolution: resolution || '1920x1080',
+    presetId: presetId || null,
+    presetName: presetName || null,
+    generationParams: {
+      batchName, videoFiles, imageFiles, logoText, logoSubtext,
+      textMaxChars, preferredDuration, sliceDuration, imageDuration,
+      resolution, presetId, videoCount,
+    },
   });
 
   res.json({ jobId });
@@ -512,12 +635,20 @@ app.post('/api/generate-posts', async (req, res) => {
     if (preset?.layout) effectiveLayout = preset.layout;
   }
 
+  let postPresetName = null;
+  if (presetId) {
+    const p = await Preset.findOne({ id: presetId });
+    if (p) postPresetName = p.name;
+  }
   const jobId = uuidv4();
   const job = await Job.create({
     id: jobId, batchName, status: 'queued',
     imageFiles: imageFiles || [],
     resolution: resolution || '1080x1080',
     type: 'post',
+    presetId: presetId || null,
+    presetName: postPresetName || null,
+    generationParams: { batchName, imageFiles, quotes, postCount, resolution, textMaxChars, presetId },
   });
 
   res.json({ jobId });

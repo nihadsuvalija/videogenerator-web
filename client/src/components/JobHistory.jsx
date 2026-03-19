@@ -1,31 +1,40 @@
-import React, { useState, useEffect } from 'react';
-import { RefreshCw, Download, AlertCircle, Check, Clock, ChevronDown, Pencil, Film, Image } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { RefreshCw, Download, AlertCircle, Check, Clock, ChevronDown, Pencil, Film, Image, ChevronLeft, ChevronRight, Sliders } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, Progress } from './ui-primitives';
 import { Button } from './ui-button';
 import { cn } from '../lib/utils';
 
 const API = 'http://localhost:5001';
+const PAGE_SIZE = 10;
 
 const isImage = (f) => /\.(jpe?g|png|webp|gif)$/i.test(f);
 
 export default function JobHistory({ onOpenEditor }) {
-  const [jobs, setJobs]       = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [jobs, setJobs]         = useState([]);
+  const [total, setTotal]       = useState(0);
+  const [pages, setPages]       = useState(1);
+  const [page, setPage]         = useState(1);
+  const [loading, setLoading]   = useState(false);
   const [expanded, setExpanded] = useState(null);
 
-  const load = async () => {
+  const load = useCallback(async (p = page) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/jobs`);
-      setJobs(await res.json());
+      const res  = await fetch(`${API}/api/jobs?page=${p}&limit=${PAGE_SIZE}`);
+      const data = await res.json();
+      setJobs(data.jobs  ?? []);
+      setTotal(data.total ?? 0);
+      setPages(data.pages ?? 1);
     } finally { setLoading(false); }
-  };
+  }, [page]);
 
   useEffect(() => {
-    load();
-    const iv = setInterval(load, 3000);
+    load(page);
+    // Only auto-poll the first page to catch in-progress jobs
+    if (page !== 1) return;
+    const iv = setInterval(() => load(1), 3000);
     return () => clearInterval(iv);
-  }, []);
+  }, [page]);
 
   const statusIcon = (s) => {
     if (s === 'running') return <RefreshCw className="w-4 h-4 text-blue-400 animate-spin" />;
@@ -40,8 +49,11 @@ export default function JobHistory({ onOpenEditor }) {
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base">Job History</CardTitle>
-          <Button variant="ghost" size="icon" onClick={load} className="h-7 w-7">
+          <CardTitle className="text-base">
+            Job History
+            {total > 0 && <span className="ml-2 text-xs text-muted-foreground font-normal">({total} total)</span>}
+          </CardTitle>
+          <Button variant="ghost" size="icon" onClick={() => load(page)} className="h-7 w-7">
             <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
           </Button>
         </div>
@@ -77,8 +89,13 @@ export default function JobHistory({ onOpenEditor }) {
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-muted-foreground mono mt-0.5">
-                        {job.id.slice(0, 12)}... · {new Date(job.createdAt).toLocaleString()}
+                      <div className="text-xs text-muted-foreground mono mt-0.5 flex items-center gap-2 flex-wrap">
+                        <span>{job.id.slice(0, 12)}... · {new Date(job.createdAt).toLocaleString()}</span>
+                        {job.presetName && (
+                          <span className="flex items-center gap-1 text-primary/80">
+                            <Sliders className="w-2.5 h-2.5" />{job.presetName}
+                          </span>
+                        )}
                       </div>
                       {job.status === 'running' && <Progress value={job.progress} className="h-1 mt-2" />}
                     </div>
@@ -155,6 +172,51 @@ export default function JobHistory({ onOpenEditor }) {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {pages > 1 && (
+          <div className="flex items-center justify-between px-6 py-3 border-t border-border">
+            <span className="text-xs text-muted-foreground">
+              Page {page} of {pages}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="w-7 h-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              {Array.from({ length: pages }, (_, i) => i + 1)
+                .filter(p => p === 1 || p === pages || Math.abs(p - page) <= 1)
+                .reduce((acc, p, idx, arr) => {
+                  if (idx > 0 && arr[idx - 1] !== p - 1) acc.push('…');
+                  acc.push(p);
+                  return acc;
+                }, [])
+                .map((p, i) => p === '…' ? (
+                  <span key={`ellipsis-${i}`} className="w-7 h-7 flex items-center justify-center text-xs text-muted-foreground">…</span>
+                ) : (
+                  <button
+                    key={p}
+                    onClick={() => setPage(p)}
+                    className={cn(
+                      "w-7 h-7 flex items-center justify-center rounded-md text-xs font-medium transition-colors",
+                      page === p ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:text-foreground"
+                    )}
+                  >{p}</button>
+                ))
+              }
+              <button
+                onClick={() => setPage(p => Math.min(pages, p + 1))}
+                disabled={page === pages}
+                className="w-7 h-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
       </CardContent>

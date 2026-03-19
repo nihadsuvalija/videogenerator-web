@@ -105,9 +105,45 @@ body::before {
   background: hsla(217, 91%, 60%, 0.05);
 }
 
-/* Slide-in animation */
+/* ── Animations ─────────────────────────────────────────────────────────────── */
+
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 .slide-up { animation: slideUp 0.4s ease-out forwards; }
+
+/* Tab content: fade + gentle lift */
+@keyframes tabEnter {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.tab-enter { animation: tabEnter 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+
+/* Staggered card pop-in */
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+.card-in { animation: cardIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* Filter pill appear */
+@keyframes pillIn {
+  from { opacity: 0; transform: scale(0.85); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.pill-in { animation: pillIn 0.18s ease-out forwards; }
+
+/* Fade in only */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.fade-in { animation: fadeIn 0.2s ease-out forwards; }
+
+/* User dropdown */
+@keyframes dropdownIn {
+  from { opacity: 0; transform: translateY(-6px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+.dropdown-in { animation: dropdownIn 0.15s cubic-bezier(0.22, 1, 0.36, 1) forwards; }

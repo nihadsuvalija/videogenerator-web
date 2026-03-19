@@ -1,2 +1,63 @@
-client/node_modules/*
-server/node_modules/*
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── Editor / IDE ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Environment variables ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+
+# ── Node ──────────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+.yarn-integrity
+
+# ── React / CRA build ─────────────────────────────────────────────────────────
+client/build/
+client/.eslintcache
+client/node_modules/
+
+# ── Server ────────────────────────────────────────────────────────────────────
+server/node_modules/
+server/data/
+# ── Generated / uploaded data ─────────────────────────────────────────────────
+# outputs folder is intentionally tracked — do not ignore
+server/data/overlays/
+server/data/batches/*/videos/
+server/data/batches/*/images/
+server/data/assets/logo.png
+server/data/preset_overlays/
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
+*.log
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# ── Runtime / cache ───────────────────────────────────────────────────────────
+.cache/
+dist/
+tmp/
+temp/
