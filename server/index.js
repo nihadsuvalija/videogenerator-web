@@ -49,6 +49,9 @@ const JobSchema = new mongoose.Schema({
   progress:    { type: Number, default: 0 },
   log:         [String],
   outputFile:  String,
+  outputFiles:  [String],   // array of output file paths for multi-video jobs
+  outputFolder: String,     // folder name when multiple videos are generated
+  type:         { type: String, default: 'video' }, // 'video' | 'post'
   duration:    Number,
   videoFiles:  [String],
   imageFiles:  [String],
@@ -69,9 +72,12 @@ const PresetSchema = new mongoose.Schema({
   imageDuration:  { type: Number, default: 0.2 },
   logoText:       { type: String, default: '' },
   logoSubtext:    { type: String, default: '' },
+  textMaxChars:      { type: Number, default: 20 },
+  preferredDuration: { type: Number, default: 20 },
   selectedVideos: { type: [String], default: [] },
   selectedImages: { type: [String], default: [] },
   locked:         { type: Boolean, default: false },
+  videoCount:     { type: Number, default: 1 }, // number of videos to generate
   // Layout — all positions as 0–100 percentages of frame dimensions
   layout: {
     logo: {
@@ -88,6 +94,7 @@ const PresetSchema = new mongoose.Schema({
     },
     overlays: { type: Array, default: [] },
     // Each overlay: { id, file, x, y, w, h }  — all in %
+    dimBackground: { type: Number, default: 0 }, // 0 = no dim, 1 = full black
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
@@ -444,10 +451,13 @@ app.post('/api/generate', async (req, res) => {
   const {
     batchName, videoFiles, imageFiles,
     logoText, logoSubtext,
+    textMaxChars,
+    preferredDuration,
     sliceDuration, imageDuration,
     resolution,
     sessionToken,
     presetId,       // optional — used to load layout
+    videoCount,
   } = req.body;
 
   if (!batchName) return res.status(400).json({ error: 'batchName required' });
@@ -475,21 +485,59 @@ app.post('/api/generate', async (req, res) => {
     imageFiles: imageFiles || [],
     logoText: logoText || '',
     logoSubtext: logoSubtext || '',
+    textMaxChars: Number(textMaxChars) || 0,
+    preferredDuration: Number(preferredDuration) || 0,
     sliceDuration: Number(sliceDuration) || 3,
     imageDuration: Number(imageDuration) || 0.2,
     resolution: resolution || '1920x1080',
     sessionToken: sessionToken || null,
     layout,
     presetId: presetId || null,
+    videoCount: Number(videoCount) || 1,
   }).catch(e => console.error('Generation error:', e));
+});
+
+app.post('/api/generate-posts', async (req, res) => {
+  const {
+    batchName, imageFiles, quotes, postCount,
+    resolution, textMaxChars, layout, presetId,
+  } = req.body;
+
+  if (!batchName) return res.status(400).json({ error: 'batchName required' });
+
+  // Load layout from preset if not explicitly provided
+  let effectiveLayout = layout || null;
+  if (presetId && !effectiveLayout) {
+    const preset = await Preset.findOne({ id: presetId });
+    if (preset?.layout) effectiveLayout = preset.layout;
+  }
+
+  const jobId = uuidv4();
+  const job = await Job.create({
+    id: jobId, batchName, status: 'queued',
+    imageFiles: imageFiles || [],
+    resolution: resolution || '1080x1080',
+    type: 'post',
+  });
+
+  res.json({ jobId });
+
+  runPostGeneration(job, {
+    batchName,
+    imageFiles: imageFiles || [],
+    quotes:      quotes || '',
+    postCount:   Number(postCount) || 10,
+    resolution:  resolution || '1080x1080',
+    textMaxChars: Number(textMaxChars) || 25,
+    layout:      effectiveLayout,
+    presetId:    presetId || null,
+  }).catch(e => console.error('Post generation error:', e));
 });
 
 // ─── Video Generation ─────────────────────────────────────────────────────────
 async function runGeneration(job, opts) {
-  const { batchName, videoFiles, imageFiles, logoText, logoSubtext, sliceDuration, imageDuration, resolution, sessionToken, layout, presetId } = opts;
+  const { batchName, videoFiles, imageFiles, logoText, logoSubtext, textMaxChars, preferredDuration, sliceDuration, imageDuration, resolution, sessionToken, layout, presetId, videoCount = 1 } = opts;
   const batchDir = path.join(BATCHES_DIR, batchName);
-  const tmpDir = path.join(OUTPUT_DIR, `tmp_${job.id}`);
-  fs.mkdirSync(tmpDir, { recursive: true });
 
   const addLog = async (msg) => {
     console.log(`[${job.id}] ${msg}`);
@@ -508,9 +556,10 @@ async function runGeneration(job, opts) {
 
     // ── Layout — resolve positions (% → px) ──────────────────────────────────
     const L = {
-      logo:      { x: 50, y: 90, w: 18, enabled: true,  ...(layout?.logo      || {}) },
-      subtitles: { x: 50, y: 50, fontSize: 52, enabled: true, ...(layout?.subtitles || {}) },
-      overlays:  layout?.overlays || [],
+      logo:          { x: 50, y: 90, w: 18, enabled: true,  ...(layout?.logo      || {}) },
+      subtitles:     { x: 50, y: 50, fontSize: 52, enabled: true, ...(layout?.subtitles || {}) },
+      overlays:      layout?.overlays || [],
+      dimBackground: layout?.dimBackground ?? 0,
     };
 
     // Scale factors relative to 1920x1080 baseline
@@ -521,14 +570,11 @@ async function runGeneration(job, opts) {
     const padEdge   = Math.round(24 * sf);
 
     // Convert % positions to ffmpeg overlay expressions
-    // Logo: x/y are center point percentages → top-left for overlay
     const logoXExpr = `${Math.round((L.logo.x / 100) * W)}-w/2`;
     const logoYExpr = `${Math.round((L.logo.y / 100) * H)}-h/2`;
 
-    // Subtitle: x/y center % → ASS MarginL/MarginR/MarginV
     const subXPx  = Math.round((L.subtitles.x / 100) * W);
     const subYPx  = Math.round((L.subtitles.y / 100) * H);
-    // drawtext position for plain text
     const textXExpr = L.subtitles.x === 50 ? '(w-text_w)/2' : `${subXPx}-text_w/2`;
     const textYExpr = `${subYPx}`;
     const textYSub  = `${subYPx + Math.round(fontMain * 1.3)}`;
@@ -548,7 +594,7 @@ async function runGeneration(job, opts) {
     }
 
     // Static overlay images from preset
-    const staticOverlays = []; // { path, xExpr, yExpr, wPx }
+    const staticOverlays = [];
     if (presetId && L.overlays.length > 0) {
       const presetOverlayDir = path.join(DATA_ROOT, 'preset_overlays', presetId);
       for (const ov of L.overlays) {
@@ -568,7 +614,7 @@ async function runGeneration(job, opts) {
     const safeText = (logoText || '').replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
     const safeSub  = (logoSubtext || '').replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
 
-    // ── Convert SRT → ASS with layout-driven position ─────────────────────────
+    // ── Convert SRT → ASS with layout-driven position (shared across all videos) ─
     let assPath = null;
     if (srtPath) {
       assPath = srtPath.replace(/\.srt$/i, '.ass');
@@ -579,11 +625,17 @@ async function runGeneration(job, opts) {
     }
 
     // ── Filter builder ────────────────────────────────────────────────────────
-    // logoIdx: ffmpeg input index of logo image; extraStart: next available input index
     const buildOverlayFilters = (inputLabel, logoIdx, extraInputStart) => {
       const filters = [];
       let cur = inputLabel;
       let nextIdx = extraInputStart;
+
+      // Dim background before overlaying elements
+      if (L.dimBackground > 0) {
+        const factor = parseFloat((1 - L.dimBackground).toFixed(3));
+        filters.push(`[${cur}]colorchannelmixer=rr=${factor}:gg=${factor}:bb=${factor}[bg_dimmed]`);
+        cur = 'bg_dimmed';
+      }
 
       // Logo
       if (logoPath && logoIdx !== null) {
@@ -604,246 +656,557 @@ async function runGeneration(job, opts) {
 
       // Subtitles (ASS burned in final pass, plain text here)
       if (!assPath && safeText) {
-        let tf = `[${cur}]drawtext=fontsize=${fontMain}:fontcolor=white:x=${textXExpr}:y=${textYExpr}:text='${safeText}':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5`;
-        if (safeSub) {
-          tf += `,drawtext=fontsize=${fontSub}:fontcolor=white@0.9:x=${textXExpr}:y=${textYSub}:text='${safeSub}':shadowcolor=black@0.8:shadowx=2:shadowy=2`;
-        }
-        tf += '[after_text]';
-        filters.push(tf);
-        cur = 'after_text';
+        const escLine = (l) => l.replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+        const mainLines = wrapText(logoText || '', textMaxChars).map(escLine);
+        const subLines  = (logoSubtext && safeSub) ? wrapText(logoSubtext || '', textMaxChars).map(escLine) : [];
+
+        const lineH      = Math.round(fontMain * 1.3);
+        const subLineH   = Math.round(fontSub  * 1.3);
+        const totalMainH = mainLines.length * lineH;
+        const blockH     = totalMainH + (subLines.length > 0 ? Math.round(fontMain * 0.5) + subLines.length * subLineH : 0);
+
+        let dtIdx = 0;
+        mainLines.forEach((line, idx) => {
+          const yPx = Math.max(0, subYPx - Math.round(blockH / 2) + idx * lineH);
+          const outLabel = 'dt' + (dtIdx++);
+          filters.push('[' + cur + ']drawtext=fontsize=' + fontMain + ':fontcolor=white:x=' + textXExpr + ':y=' + yPx + ":text='" + line + "':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5[" + outLabel + ']');
+          cur = outLabel;
+        });
+
+        subLines.forEach((line, idx) => {
+          const yPx = Math.max(0, subYPx - Math.round(blockH / 2) + totalMainH + Math.round(fontMain * 0.5) + idx * subLineH);
+          const outLabel = 'dt' + (dtIdx++);
+          filters.push('[' + cur + ']drawtext=fontsize=' + fontSub + ':fontcolor=white@0.9:x=' + textXExpr + ':y=' + yPx + ":text='" + line + "':shadowcolor=black@0.8:shadowx=2:shadowy=2[" + outLabel + ']');
+          cur = outLabel;
+        });
       }
 
       return { filters, finalLabel: cur };
     };
 
-    const parts = [];
+    // ── Multi-video loop ──────────────────────────────────────────────────────
+    const effectiveCount = Math.max(1, Math.min(20, Math.round(videoCount)));
+    let outputFolder = null;
+    const allOutputFiles = [];
 
-    // ── Step 1: Video slices — keep slicing until total duration covers the audio ──
-    const vDir = path.join(batchDir, 'videos');
-    const selectedVideos = videoFiles.length > 0
-      ? videoFiles.filter(f => fs.existsSync(path.join(vDir, f)))
-      : (fs.existsSync(vDir) ? fs.readdirSync(vDir).filter(isVideo) : []);
+    if (effectiveCount > 1) {
+      outputFolder = `${batchName.replace(/\s+/g, '_')}_${Date.now()}`;
+      fs.mkdirSync(path.join(OUTPUT_DIR, outputFolder), { recursive: true });
+      await addLog(`Generating ${effectiveCount} videos → folder: ${outputFolder}`);
+    }
 
-    if (selectedVideos.length > 0) {
-      // Get audio duration upfront so we know the target length
-      let targetDur = 0;
-      if (audioPath) {
-        targetDur = await getVideoDuration(audioPath).catch(() => 0);
-      }
-      // If no audio, fall back to one pass through all videos
-      const fillToAudio = targetDur > 0;
-      await addLog(`Processing videos — target duration: ${fillToAudio ? targetDur.toFixed(1) + 's' : 'one pass'}`);
+    let lastClips = [];
+    let lastDuration = 0;
 
-      let totalSliced = 0;
-      let sliceIndex  = 0;
-      let pass        = 0; // how many times we've cycled through all videos
+    for (let vidIdx = 0; vidIdx < effectiveCount; vidIdx++) {
+      const fileName = effectiveCount > 1 ? `output_${vidIdx + 1}.mp4` : `output_${job.id}.mp4`;
+      const outputPath = effectiveCount > 1
+        ? path.join(OUTPUT_DIR, outputFolder, fileName)
+        : path.join(OUTPUT_DIR, fileName);
+      const storedName = effectiveCount > 1 ? `${outputFolder}/${fileName}` : fileName;
 
-      // Shuffle once per pass, cycle until we've filled the audio duration
-      while (true) {
-        const shuffled = shuffle([...selectedVideos]);
+      const localTmpDir = path.join(OUTPUT_DIR, `tmp_${job.id}_${vidIdx}`);
+      fs.mkdirSync(localTmpDir, { recursive: true });
 
-        for (let i = 0; i < shuffled.length; i++) {
-          // Stop as soon as we've covered the full audio duration
-          if (fillToAudio && totalSliced >= targetDur) break;
+      if (effectiveCount > 1) await addLog(`--- Video ${vidIdx + 1} / ${effectiveCount} ---`);
 
-          const src = path.join(vDir, shuffled[i]);
-          const out = path.join(tmpDir, `vslice_${sliceIndex}.mp4`);
-          const srcDur = await getVideoDuration(src);
+      // Scale progress for this video within overall job progress (5–95%)
+      const pBase  = 5 + (vidIdx / effectiveCount) * 90;
+      const pRange = 90 / effectiveCount;
+      const localSetStatus = async (pct) => setStatus('running', Math.round(pBase + (pct / 100) * pRange));
 
-          // How much more do we need? Never cut a slice longer than sliceDuration
-          const remaining   = fillToAudio ? targetDur - totalSliced : sliceDuration;
-          const thisSliceDur = Math.min(sliceDuration, remaining, srcDur);
-          if (thisSliceDur <= 0) break;
+      try {
+        const parts = [];
 
-          const maxStart = Math.max(0, srcDur - thisSliceDur);
-          const startTime = Math.random() * maxStart;
-          await addLog(`  Slice ${sliceIndex + 1}: ${shuffled[i]} at ${startTime.toFixed(2)}s for ${thisSliceDur.toFixed(2)}s (total so far: ${totalSliced.toFixed(1)}s)`);
+        // ── Step 1: Video slices ──────────────────────────────────────────────
+        const vDir = path.join(batchDir, 'videos');
+        const selectedVideos = videoFiles.length > 0
+          ? videoFiles.filter(f => fs.existsSync(path.join(vDir, f)))
+          : (fs.existsSync(vDir) ? fs.readdirSync(vDir).filter(isVideo) : []);
 
-          const logoInputArgs  = logoPath ? ['-i', logoPath] : [];
-          const logoIdx        = logoPath ? 1 : null;
-          const staticInputArgs = staticOverlays.map(ov => ['-i', ov.path]).flat();
-          const extraInputStart = (logoPath ? 2 : 1);
+        if (selectedVideos.length > 0) {
+          let targetDur = 0;
+          if (audioPath) {
+            targetDur = await getVideoDuration(audioPath).catch(() => 0);
+          }
+          if (preferredDuration > 0) {
+            targetDur = audioPath ? Math.min(targetDur, preferredDuration) : preferredDuration;
+          }
+          const fillToAudio = targetDur > 0;
+          await addLog(`Processing videos — target: ${fillToAudio ? targetDur.toFixed(1) + 's' : 'one pass'}${preferredDuration > 0 ? ' (preferred duration)' : ''}`);
 
-          // fps=30 before trim normalises VFR sources so trim timestamps align correctly
-          const scalePart = `[0:v]fps=30,trim=start=${startTime.toFixed(3)}:duration=${thisSliceDur.toFixed(3)},setpts=PTS-STARTPTS,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1[scaled]`;
-          const { filters, finalLabel } = buildOverlayFilters('scaled', logoIdx, extraInputStart);
-          const filterComplex = [scalePart, ...filters].join(';');
+          let totalSliced = 0;
+          let sliceIndex  = 0;
+          let pass        = 0;
 
-          let sliceOk = false;
-          try {
-            await ffmpegRun([
-              '-i', src,
-              ...logoInputArgs,
-              ...staticInputArgs,
-              '-filter_complex', filterComplex,
-              '-map', `[${finalLabel}]`,
-              '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-              '-an',
-              '-y', out
-            ]);
-            // Verify the output actually has content
-            const actualDur = await getVideoDuration(out).catch(() => 0);
-            if (actualDur < 0.1) {
-              await addLog(`  WARNING: slice ${sliceIndex + 1} produced empty output (${actualDur.toFixed(2)}s), skipping`);
-              if (fs.existsSync(out)) fs.unlinkSync(out);
-            } else {
-              sliceOk = true;
+          while (true) {
+            const shuffled = shuffle([...selectedVideos]);
+
+            for (let i = 0; i < shuffled.length; i++) {
+              if (fillToAudio && totalSliced >= targetDur) break;
+
+              const src = path.join(vDir, shuffled[i]);
+              const out = path.join(localTmpDir, `vslice_${sliceIndex}.mp4`);
+              const srcDur = await getVideoDuration(src);
+
+              const remaining    = fillToAudio ? targetDur - totalSliced : sliceDuration;
+              const thisSliceDur = Math.min(sliceDuration, remaining, srcDur);
+              if (thisSliceDur <= 0) break;
+
+              const maxStart  = Math.max(0, srcDur - thisSliceDur);
+              const startTime = Math.random() * maxStart;
+              await addLog(`  Slice ${sliceIndex + 1}: ${shuffled[i]} at ${startTime.toFixed(2)}s for ${thisSliceDur.toFixed(2)}s (total so far: ${totalSliced.toFixed(1)}s)`);
+
+              const logoInputArgs   = logoPath ? ['-i', logoPath] : [];
+              const logoIdx         = logoPath ? 1 : null;
+              const staticInputArgs = staticOverlays.map(ov => ['-i', ov.path]).flat();
+              const extraInputStart = (logoPath ? 2 : 1);
+
+              const scalePart = `[0:v]fps=30,trim=start=${startTime.toFixed(3)}:duration=${thisSliceDur.toFixed(3)},setpts=PTS-STARTPTS,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1[scaled]`;
+              const { filters, finalLabel } = buildOverlayFilters('scaled', logoIdx, extraInputStart);
+              const filterComplex = [scalePart, ...filters].join(';');
+
+              let sliceOk = false;
+              try {
+                await ffmpegRun([
+                  '-i', src,
+                  ...logoInputArgs,
+                  ...staticInputArgs,
+                  '-filter_complex', filterComplex,
+                  '-map', `[${finalLabel}]`,
+                  '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+                  '-an',
+                  '-y', out
+                ]);
+                const actualDur = await getVideoDuration(out).catch(() => 0);
+                if (actualDur < 0.1) {
+                  await addLog(`  WARNING: slice ${sliceIndex + 1} produced empty output (${actualDur.toFixed(2)}s), skipping`);
+                  if (fs.existsSync(out)) fs.unlinkSync(out);
+                } else {
+                  sliceOk = true;
+                }
+              } catch (sliceErr) {
+                await addLog(`  WARNING: slice ${sliceIndex + 1} failed (${sliceErr.message.slice(0, 120)}), skipping`);
+                if (fs.existsSync(out)) fs.unlinkSync(out);
+              }
+
+              if (sliceOk) {
+                parts.push(out);
+                totalSliced += thisSliceDur;
+                sliceIndex++;
+              }
+
+              const pct = fillToAudio ? Math.min(totalSliced / targetDur, 1) : (sliceIndex / selectedVideos.length);
+              await localSetStatus(Math.round(pct * 55));
             }
-          } catch (sliceErr) {
-            await addLog(`  WARNING: slice ${sliceIndex + 1} failed (${sliceErr.message.slice(0, 120)}), skipping`);
-            if (fs.existsSync(out)) fs.unlinkSync(out);
+
+            if (!fillToAudio || totalSliced >= targetDur) break;
+            pass++;
+            if (pass > 50) { await addLog('Safety limit: stopping after 50 passes'); break; }
           }
 
-          if (sliceOk) {
-            parts.push(out);
-            totalSliced += thisSliceDur;
-            sliceIndex++;
-          }
-
-          const pct = fillToAudio ? Math.min(totalSliced / targetDur, 1) : (sliceIndex / selectedVideos.length);
-          await setStatus('running', 5 + Math.round(pct * 55));
+          await addLog(`Video slicing complete: ${sliceIndex} slices, ${totalSliced.toFixed(1)}s total`);
         }
 
-        // Exit if we've hit the target or this is a no-audio single pass
-        if (!fillToAudio || totalSliced >= targetDur) break;
-        pass++;
-        if (pass > 50) { await addLog('Safety limit: stopping after 50 passes'); break; } // safety cap
+        // ── Step 2: Image slideshow ───────────────────────────────────────────
+        const iDir = path.join(batchDir, 'images');
+        const selectedImages = imageFiles.length > 0
+          ? imageFiles.filter(f => fs.existsSync(path.join(iDir, f)))
+          : (fs.existsSync(iDir) ? fs.readdirSync(iDir).filter(isImage) : []);
+
+        if (selectedImages.length > 0) {
+          let imgTargetDur = 0;
+          if (preferredDuration > 0) {
+            imgTargetDur = Math.max(0, preferredDuration - (parts.reduce((s, p) => s, 0)));
+          } else if (audioPath) {
+            const audioDur = await getVideoDuration(audioPath).catch(() => 0);
+            imgTargetDur = Math.max(0, audioDur);
+          }
+
+          const imgFillToTarget = imgTargetDur > 0;
+          await addLog(`Processing images — target: ${imgFillToTarget ? imgTargetDur.toFixed(1) + 's' : 'one pass'}`);
+
+          const imageSequence = [];
+          if (imgFillToTarget) {
+            let filled = 0;
+            let pass = 0;
+            while (filled < imgTargetDur && pass < 200) {
+              const shuffled = pass === 0 ? [...selectedImages] : shuffle([...selectedImages]);
+              for (const img of shuffled) {
+                const remaining = imgTargetDur - filled;
+                const thisDur = Math.min(imageDuration, remaining);
+                if (thisDur <= 0.05) break;
+                imageSequence.push({ img, dur: thisDur });
+                filled += thisDur;
+                if (filled >= imgTargetDur) break;
+              }
+              pass++;
+            }
+          } else {
+            selectedImages.forEach(img => imageSequence.push({ img, dur: imageDuration }));
+          }
+
+          await addLog(`  Image sequence: ${imageSequence.length} frames totalling ${imageSequence.reduce((s,x) => s+x.dur, 0).toFixed(1)}s`);
+
+          const logoInputArgs = logoPath ? ['-i', logoPath] : [];
+          const logoIdx = logoPath ? imageSequence.length : null;
+          const staticInputArgs = staticOverlays.map(ov => ['-i', ov.path]).flat();
+          const extraInputStart = imageSequence.length + (logoPath ? 1 : 0);
+
+          const imgInputArgs = [];
+          imageSequence.forEach(({ img, dur }) => {
+            imgInputArgs.push('-loop', '1', '-t', dur.toFixed(3), '-i', path.join(iDir, img));
+          });
+
+          let filterParts = [];
+          for (let i = 0; i < imageSequence.length; i++) {
+            filterParts.push(`[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,fps=30[v${i}]`);
+          }
+          const concatInputs = imageSequence.map((_, i) => `[v${i}]`).join('');
+          filterParts.push(`${concatInputs}concat=n=${imageSequence.length}:v=1:a=0[slide]`);
+
+          const { filters, finalLabel } = buildOverlayFilters('slide', logoIdx, extraInputStart);
+          filterParts = [...filterParts, ...filters];
+
+          const slideshowOut = path.join(localTmpDir, 'slideshow.mp4');
+          await ffmpegRun([
+            ...imgInputArgs,
+            ...logoInputArgs,
+            ...staticInputArgs,
+            '-filter_complex', filterParts.join(';'),
+            '-map', `[${finalLabel}]`,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+            '-an',
+            '-y', slideshowOut
+          ]);
+          parts.push(slideshowOut);
+          await localSetStatus(75);
+          await addLog('Slideshow segment created.');
+        }
+
+        if (parts.length === 0) throw new Error('No video or image files to process.');
+
+        // ── Step 3: Concatenate ───────────────────────────────────────────────
+        await addLog('Concatenating all segments...');
+        await localSetStatus(82);
+
+        const silentOut = path.join(localTmpDir, 'silent_output.mp4');
+        if (parts.length === 1) {
+          fs.copyFileSync(parts[0], silentOut);
+        } else {
+          const listFile = path.join(localTmpDir, 'concat_list.txt');
+          fs.writeFileSync(listFile, parts.map(p => `file '${p}'`).join('\n'));
+          await ffmpegRun(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', silentOut]);
+        }
+
+        // ── Step 4: Mix audio ─────────────────────────────────────────────────
+        const preSubsPath = assPath
+          ? path.join(localTmpDir, 'pre_subs.mp4')
+          : outputPath;
+
+        if (audioPath) {
+          await addLog('Mixing audio...');
+          await localSetStatus(88);
+          const muxTarget = assPath ? path.join(localTmpDir, 'pre_subs.mp4') : preSubsPath;
+          const limitArgs = preferredDuration > 0
+            ? ['-t', String(preferredDuration)]
+            : ['-shortest'];
+          await ffmpegRun([
+            '-i', silentOut,
+            '-i', audioPath,
+            '-map', '0:v',
+            '-map', '1:a',
+            '-c:v', assPath ? 'copy' : 'libx264',
+            ...(assPath ? [] : ['-preset', 'fast', '-crf', '23']),
+            '-c:a', 'aac', '-b:a', '192k',
+            ...limitArgs,
+            '-y', muxTarget
+          ]);
+        } else {
+          const trimArgs = preferredDuration > 0 ? ['-t', String(preferredDuration)] : [];
+          if (trimArgs.length > 0) {
+            await ffmpegRun(['-i', silentOut, ...trimArgs, '-c', 'copy', '-y', preSubsPath]);
+          } else {
+            fs.copyFileSync(silentOut, preSubsPath);
+          }
+          if (!assPath) {
+            if (trimArgs.length > 0) {
+              await ffmpegRun(['-i', silentOut, ...trimArgs, '-c', 'copy', '-y', outputPath]);
+            } else {
+              fs.copyFileSync(silentOut, outputPath);
+            }
+          }
+        }
+
+        // ── Step 5: Burn ASS subtitles ────────────────────────────────────────
+        if (assPath) {
+          await addLog('Burning karaoke subtitles onto final video...');
+          await localSetStatus(95);
+          const safeAss = assPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+          await ffmpegRun([
+            '-i', preSubsPath,
+            '-vf', `ass='${safeAss}'`,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+            '-c:a', 'copy',
+            ...(preferredDuration > 0 ? ['-t', String(preferredDuration)] : []),
+            '-y', outputPath
+          ]);
+        }
+
+        // Clip metadata (for the editor — only meaningful for single-video jobs)
+        const clips = [];
+        let cursor = 0;
+        for (let i = 0; i < parts.length; i++) {
+          const dur = await getVideoDuration(parts[i]).catch(() => 3);
+          const partBase = path.basename(parts[i]);
+          let src = partBase;
+          let clipType = 'video';
+          if (partBase === 'slideshow.mp4') { clipType = 'image'; src = 'slideshow'; }
+          else if (partBase.startsWith('vslice_')) { const idx = parseInt(partBase.replace('vslice_','').replace('.mp4','')); src = selectedVideos[idx] || partBase; }
+          clips.push({ id: uuidv4(), clipType, src, startTime: cursor, clipDuration: dur, trimIn: 0, trimOut: dur, order: i });
+          cursor += dur;
+        }
+        const totalDuration = await getVideoDuration(outputPath).catch(() => cursor);
+
+        lastClips    = clips;
+        lastDuration = totalDuration;
+        allOutputFiles.push(storedName);
+        await addLog(`Video ${vidIdx + 1} complete: ${storedName}`);
+
+      } finally {
+        fs.rmSync(localTmpDir, { recursive: true, force: true });
       }
-
-      await addLog(`Video slicing complete: ${sliceIndex} slices, ${totalSliced.toFixed(1)}s total`);
     }
 
-    // ── Step 2: Image slideshow ───────────────────────────────────────────────
-    const iDir = path.join(batchDir, 'images');
-    const selectedImages = imageFiles.length > 0
-      ? imageFiles.filter(f => fs.existsSync(path.join(iDir, f)))
-      : (fs.existsSync(iDir) ? fs.readdirSync(iDir).filter(isImage) : []);
-
-    if (selectedImages.length > 0) {
-      await addLog(`Processing ${selectedImages.length} image(s) into slideshow...`);
-
-      const imgInputArgs = [];
-      for (const img of selectedImages) {
-        imgInputArgs.push('-loop', '1', '-t', String(imageDuration), '-i', path.join(iDir, img));
-      }
-
-      const logoInputArgs = logoPath ? ['-i', logoPath] : [];
-      const logoIdx = logoPath ? selectedImages.length : null;
-      const staticInputArgs = staticOverlays.map(ov => ['-i', ov.path]).flat();
-      const extraInputStart = selectedImages.length + (logoPath ? 1 : 0);
-
-      let filterParts = [];
-      for (let i = 0; i < selectedImages.length; i++) {
-        filterParts.push(`[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,fps=30[v${i}]`);
-      }
-      const concatInputs = selectedImages.map((_, i) => `[v${i}]`).join('');
-      filterParts.push(`${concatInputs}concat=n=${selectedImages.length}:v=1:a=0[slide]`);
-
-      const { filters, finalLabel } = buildOverlayFilters('slide', logoIdx, extraInputStart);
-      filterParts = [...filterParts, ...filters];
-
-      const slideshowOut = path.join(tmpDir, 'slideshow.mp4');
-      await ffmpegRun([
-        ...imgInputArgs,
-        ...logoInputArgs,
-        ...staticInputArgs,
-        '-filter_complex', filterParts.join(';'),
-        '-map', `[${finalLabel}]`,
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-        '-an',
-        '-y', slideshowOut
-      ]);
-      parts.push(slideshowOut);
-      await setStatus('running', 75);
-      await addLog('Slideshow segment created.');
-    }
-
-    if (parts.length === 0) throw new Error('No video or image files to process.');
-
-    // ── Step 3: Concatenate ───────────────────────────────────────────────────
-    await addLog('Concatenating all segments...');
-    await setStatus('running', 82);
-
-    const silentOut = path.join(tmpDir, 'silent_output.mp4');
-    if (parts.length === 1) {
-      fs.copyFileSync(parts[0], silentOut);
-    } else {
-      const listFile = path.join(tmpDir, 'concat_list.txt');
-      fs.writeFileSync(listFile, parts.map(p => `file '${p}'`).join('\n'));
-      await ffmpegRun(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', silentOut]);
-    }
-
-    // ── Step 4: Mix audio — no looping needed, slices already cover full duration ──
-    const outputFile = `output_${job.id}.mp4`;
-    const outputPath = path.join(OUTPUT_DIR, outputFile);
-
-    const preSubsPath = assPath
-      ? path.join(tmpDir, 'pre_subs.mp4')
-      : outputPath;
-
-    if (audioPath) {
-      await addLog('Mixing audio...');
-      await setStatus('running', 88);
-      const muxTarget = assPath ? path.join(tmpDir, 'pre_subs.mp4') : preSubsPath;
-      await ffmpegRun([
-        '-i', silentOut,
-        '-i', audioPath,
-        '-map', '0:v',
-        '-map', '1:a',
-        '-c:v', assPath ? 'copy' : 'libx264',
-        ...(assPath ? [] : ['-preset', 'fast', '-crf', '23']),
-        '-c:a', 'aac', '-b:a', '192k',
-        '-shortest',
-        '-y', muxTarget
-      ]);
-    } else {
-      fs.copyFileSync(silentOut, preSubsPath);
-      if (!assPath) fs.copyFileSync(silentOut, outputPath);
-    }
-
-    // ── Step 5: Burn ASS subtitles onto the final full-length video ───────────
-    // Must happen AFTER looping so timestamps are continuous 0→end, matching SRT
-    if (assPath) {
-      await addLog('Burning karaoke subtitles onto final video...');
-      await setStatus('running', 95);
-      const safeAss = assPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
-      await ffmpegRun([
-        '-i', preSubsPath,
-        '-vf', `ass='${safeAss}'`,
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-        '-c:a', 'copy',
-        '-y', outputPath
-      ]);
-    }
-
-    // Save clip metadata for editor
-    const clips = [];
-    let cursor = 0;
-    const partsDone = [...parts];
-    for (let i = 0; i < partsDone.length; i++) {
-      const dur = await getVideoDuration(partsDone[i]).catch(() => 3);
-      const partBase = path.basename(partsDone[i]);
-      let src = partBase;
-      let clipType = 'video';
-      if (partBase === 'slideshow.mp4') { clipType = 'image'; src = 'slideshow'; }
-      else if (partBase.startsWith('vslice_')) { const idx = parseInt(partBase.replace('vslice_','').replace('.mp4','')); src = selectedVideos[idx] || partBase; }
-      clips.push({ id: uuidv4(), clipType, src, startTime: cursor, clipDuration: dur, trimIn: 0, trimOut: dur, order: i });
-      cursor += dur;
-    }
-    const totalDuration = await getVideoDuration(outputPath).catch(() => cursor);
-
-    fs.rmSync(tmpDir, { recursive: true, force: true });
     await setStatus('done', 100);
-    await Job.updateOne({ id: job.id }, { $set: { outputFile, duration: totalDuration, clips } });
-    await addLog(`Done! Output: ${outputFile}`);
+    await Job.updateOne({ id: job.id }, { $set: {
+      outputFile:   allOutputFiles[0],
+      outputFiles:  allOutputFiles,
+      ...(outputFolder ? { outputFolder } : {}),
+      duration: lastDuration,
+      clips:    lastClips,
+    }});
+    await addLog(effectiveCount > 1
+      ? `Done! ${effectiveCount} videos saved to folder: ${outputFolder}`
+      : `Done! Output: ${allOutputFiles[0]}`);
+
   } catch (err) {
     await addLog(`ERROR: ${err.message}`);
     await setStatus('error', 0);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    // tmpDirs are cleaned up in per-video finally blocks
+  }
+}
+
+// ─── Post Generation ──────────────────────────────────────────────────────────
+async function runPostGeneration(job, opts) {
+  const { batchName, imageFiles, quotes, postCount, resolution, textMaxChars, layout, presetId } = opts;
+
+  const addLog = async (msg) => {
+    console.log(`[${job.id}] ${msg}`);
+    await Job.updateOne({ id: job.id }, { $push: { log: msg } });
+  };
+  const setStatus = async (status, progress) => Job.updateOne({ id: job.id }, { status, progress });
+
+  try {
+    await setStatus('running', 5);
+    await addLog('Starting post generation...');
+
+    // ── Resolution ────────────────────────────────────────────────────────────
+    const resConfig = RESOLUTIONS[resolution] || RESOLUTIONS['1080x1080'];
+    const { w: W, h: H } = resConfig;
+    await addLog(`Resolution: ${W}x${H}`);
+
+    // ── Layout ────────────────────────────────────────────────────────────────
+    const L = {
+      logo:          { x: 50, y: 88, w: 15, enabled: true,  ...(layout?.logo      || {}) },
+      subtitles:     { x: 50, y: 50, fontSize: 64, enabled: true, ...(layout?.subtitles || {}) },
+      overlays:      layout?.overlays || [],
+      dimBackground: layout?.dimBackground ?? 0,
+    };
+
+    const sf       = W / 1920;
+    const fontMain = Math.round(L.subtitles.fontSize * sf);
+    const logoW    = Math.round((L.logo.w / 100) * W);
+
+    const logoXExpr = `${Math.round((L.logo.x / 100) * W)}-w/2`;
+    const logoYExpr = `${Math.round((L.logo.y / 100) * H)}-w/2`;
+
+    const subXPx    = Math.round((L.subtitles.x / 100) * W);
+    const subYPx    = Math.round((L.subtitles.y / 100) * H);
+    const textXExpr = L.subtitles.x === 50 ? '(w-text_w)/2' : `${subXPx}-text_w/2`;
+
+    // ── Assets ────────────────────────────────────────────────────────────────
+    const logoFiles = fs.existsSync(ASSETS_DIR) ? fs.readdirSync(ASSETS_DIR).filter(f => /^logo\./i.test(f)) : [];
+    const logoPath  = (logoFiles.length > 0 && L.logo.enabled) ? path.join(ASSETS_DIR, logoFiles[0]) : null;
+
+    // Static overlays from preset
+    const staticOverlays = [];
+    if (presetId && L.overlays.length > 0) {
+      const presetOverlayDir = path.join(DATA_ROOT, 'preset_overlays', presetId);
+      for (const ov of L.overlays) {
+        const ovPath = fs.existsSync(presetOverlayDir) ? path.join(presetOverlayDir, ov.file) : null;
+        if (ovPath && fs.existsSync(ovPath)) {
+          staticOverlays.push({
+            path: ovPath,
+            xPx:  Math.round((ov.x / 100) * W),
+            yPx:  Math.round((ov.y / 100) * H),
+            wPx:  Math.round((ov.w / 100) * W),
+          });
+        }
+      }
+    }
+
+    // ── Image pool ────────────────────────────────────────────────────────────
+    const iDir = path.join(BATCHES_DIR, batchName, 'images');
+    const availableImages = (imageFiles && imageFiles.length > 0)
+      ? imageFiles.filter(f => fs.existsSync(path.join(iDir, f)))
+      : (fs.existsSync(iDir) ? fs.readdirSync(iDir).filter(isImage) : []);
+
+    if (availableImages.length === 0) throw new Error('No images found in selected batch.');
+
+    // ── Quotes pool ───────────────────────────────────────────────────────────
+    const quoteLines = (quotes || '').split('\n').map(q => q.trim()).filter(q => q.length > 0);
+
+    // Effective count — stop at min(userCount, images, quotes if provided)
+    let count = Math.max(1, Math.min(100, Number(postCount) || 10));
+    count = Math.min(count, availableImages.length);
+    if (quoteLines.length > 0) count = Math.min(count, quoteLines.length);
+
+    await addLog(`Generating ${count} post${count !== 1 ? 's' : ''} (${availableImages.length} images, ${quoteLines.length || 'no'} quotes)`);
+
+    // ── Output folder ─────────────────────────────────────────────────────────
+    const folderName = `posts_${batchName.replace(/\s+/g, '_')}_${Date.now()}`;
+    const folderPath = path.join(OUTPUT_DIR, folderName);
+    fs.mkdirSync(folderPath, { recursive: true });
+
+    const maxChars     = Number(textMaxChars) || 25;
+    const outputImages = [];
+
+    for (let i = 0; i < count; i++) {
+      const imgPath = path.join(iDir, availableImages[i]);
+      const quote   = quoteLines[i] || '';
+      const outFile = `post_${String(i + 1).padStart(3, '0')}.jpg`;
+      const outPath = path.join(folderPath, outFile);
+
+      // ── Build FFmpeg filter chain ─────────────────────────────────────────
+      const filterParts  = [];
+      const inputArgs    = ['-i', imgPath];
+      let   cur          = 'scaled';
+      let   nextInputIdx = 1;
+
+      // Scale + crop to exact resolution
+      filterParts.push(`[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1[scaled]`);
+
+      // Background dim
+      if (L.dimBackground > 0) {
+        const factor = parseFloat((1 - L.dimBackground).toFixed(3));
+        filterParts.push(`[${cur}]colorchannelmixer=rr=${factor}:gg=${factor}:bb=${factor}[bg_dimmed]`);
+        cur = 'bg_dimmed';
+      }
+
+      // Logo overlay
+      if (logoPath) {
+        inputArgs.push('-i', logoPath);
+        const logoIdx = nextInputIdx++;
+        filterParts.push(`[${logoIdx}:v]scale=${logoW}:-1[logo_s]`);
+        filterParts.push(`[${cur}][logo_s]overlay=${logoXExpr}:${logoYExpr}[after_logo]`);
+        cur = 'after_logo';
+      }
+
+      // Static image overlays from preset
+      for (let j = 0; j < staticOverlays.length; j++) {
+        const ov  = staticOverlays[j];
+        const tag = `ov${j}`;
+        inputArgs.push('-i', ov.path);
+        const idx = nextInputIdx++;
+        filterParts.push(`[${idx}:v]scale=${ov.wPx}:-1[${tag}_s]`);
+        filterParts.push(`[${cur}][${tag}_s]overlay=${ov.xPx}:${ov.yPx}[${tag}_out]`);
+        cur = `${tag}_out`;
+      }
+
+      // Quote text (drawtext, multi-line via chaining)
+      if (quote && L.subtitles.enabled) {
+        const escLine = (l) => l
+          .replace(/\\/g, '\\\\')
+          .replace(/'/g, '\u2019')
+          .replace(/:/g, '\\:')
+          .replace(/\[/g, '\\[')
+          .replace(/\]/g, '\\]')
+          .replace(/%/g, '\\%');
+
+        const lines  = wrapText(quote, maxChars).map(escLine);
+        const lineH  = Math.round(fontMain * 1.4);
+        const blockH = lines.length * lineH;
+
+        lines.forEach((line, idx) => {
+          const yPx      = Math.max(0, subYPx - Math.round(blockH / 2) + idx * lineH);
+          const outLabel = `dtp${i}_${idx}`;
+          filterParts.push(
+            `[${cur}]drawtext=fontsize=${fontMain}:fontcolor=white:x=${textXExpr}:y=${yPx}` +
+            `:text='${line}':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5[${outLabel}]`
+          );
+          cur = outLabel;
+        });
+      }
+
+      try {
+        await ffmpegRun([
+          ...inputArgs,
+          '-filter_complex', filterParts.join(';'),
+          '-map', `[${cur}]`,
+          '-frames:v', '1',
+          '-q:v', '3',
+          '-y', outPath,
+        ]);
+        outputImages.push(`${folderName}/${outFile}`);
+        const preview = quote ? ` — "${quote.slice(0, 45)}${quote.length > 45 ? '…' : ''}"` : '';
+        await addLog(`Post ${i + 1}/${count}: ${availableImages[i]}${preview}`);
+      } catch (err) {
+        await addLog(`  WARNING: post ${i + 1} failed — ${err.message.slice(0, 100)}`);
+      }
+
+      await setStatus('running', 5 + Math.round(((i + 1) / count) * 90));
+    }
+
+    if (outputImages.length === 0) throw new Error('All posts failed to generate.');
+
+    await setStatus('done', 100);
+    await Job.updateOne({ id: job.id }, { $set: {
+      outputFile:   outputImages[0],
+      outputFiles:  outputImages,
+      outputFolder: folderName,
+      type:         'post',
+    }});
+    await addLog(`Done! ${outputImages.length} post${outputImages.length !== 1 ? 's' : ''} saved to: ${folderName}`);
+
+  } catch (err) {
+    await addLog(`ERROR: ${err.message}`);
+    await setStatus('error', 0);
   }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Wrap text at maxChars per line, splitting on word boundaries
+function wrapText(text, maxChars) {
+  if (!maxChars || maxChars <= 0 || text.length <= maxChars) return [text];
+  const words = text.split(' ');
+  const lines = [];
+  let current = '';
+  for (const word of words) {
+    if (!current) {
+      current = word;
+    } else if ((current + ' ' + word).length <= maxChars) {
+      current += ' ' + word;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
 function isVideo(f) { return /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(f); }
 function isImage(f) { return /\.(jpg|jpeg|png|webp|bmp|tiff)$/i.test(f); }
 function shuffle(arr) {

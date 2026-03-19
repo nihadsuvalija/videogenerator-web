@@ -21,7 +21,7 @@ const RESOLUTION_OPTIONS = [
   { key: '2160x3840', label: '2160×3840', sub: '4K Portrait' },
 ];
 
-export default function PresetsPanel({ onApplyPreset }) {
+export default function PresetsPanel({ onApplyPreset, onPresetsChanged }) {
   const [presets, setPresets]       = useState([]);
   const [loading, setLoading]       = useState(true);
   const [expandedId, setExpandedId] = useState(null);
@@ -49,6 +49,7 @@ export default function PresetsPanel({ onApplyPreset }) {
       const preset = await res.json();
       setPresets(p => [preset, ...p]);
       setExpandedId(preset.id);
+      onPresetsChanged?.();
     } finally { setCreating(false); }
   };
 
@@ -70,6 +71,7 @@ export default function PresetsPanel({ onApplyPreset }) {
     await fetch(`${API}/api/presets/${id}`, { method: 'DELETE' });
     setPresets(p => p.filter(pr => pr.id !== id));
     if (expandedId === id) setExpandedId(null);
+    onPresetsChanged?.();
   };
 
   const duplicatePreset = async (preset) => {
@@ -81,6 +83,7 @@ export default function PresetsPanel({ onApplyPreset }) {
     const newPreset = await res.json();
     setPresets(p => [newPreset, ...p]);
     setExpandedId(newPreset.id);
+    onPresetsChanged?.();
   };
 
   if (loading) {
@@ -282,23 +285,54 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
                       disabled={preset.locked} onChange={e => debouncedUpdate('logoText', e.target.value)} />
                     <Input placeholder="Subtitle text (e.g. @handle)" defaultValue={preset.logoSubtext}
                       disabled={preset.locked} onChange={e => debouncedUpdate('logoSubtext', e.target.value)} />
+                    <div className="flex items-center gap-2 pt-1">
+                      <Label className="text-xs text-muted-foreground whitespace-nowrap">Max chars / line</Label>
+                      <Input
+                        type="number" min="0" max="200" step="1"
+                        defaultValue={preset.textMaxChars ?? 0}
+                        disabled={preset.locked}
+                        onChange={e => debouncedUpdate('textMaxChars', Number(e.target.value))}
+                        className="w-24"
+                        placeholder="0 = off"
+                      />
+                      {(preset.textMaxChars > 0) && (
+                        <span className="text-xs text-muted-foreground">wraps at {preset.textMaxChars} chars</span>
+                      )}
+                    </div>
                   </div>
                 </Section>
 
                 <Separator />
 
-                {/* File selections */}
-                <Section title="File Selections" description="Apply this preset from Generate with files selected — selection saves here automatically.">
-                  <div className="space-y-2">
-                    <FileList label="Videos" files={preset.selectedVideos} color="blue"
-                      onRemove={f => !preset.locked && immediateUpdate('selectedVideos', preset.selectedVideos.filter(v => v !== f))}
-                      locked={preset.locked} />
-                    <FileList label="Images" files={preset.selectedImages} color="purple"
-                      onRemove={f => !preset.locked && immediateUpdate('selectedImages', preset.selectedImages.filter(v => v !== f))}
-                      locked={preset.locked} />
-                    {preset.selectedVideos.length === 0 && preset.selectedImages.length === 0 && (
-                      <p className="text-xs text-muted-foreground">No files saved yet.</p>
-                    )}
+                {/* Preferred duration */}
+                <Section title="Preferred Output Duration">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number" min="0" max="3600" step="1"
+                      defaultValue={preset.preferredDuration ?? 20}
+                      disabled={preset.locked}
+                      className="w-28"
+                      placeholder="0 = match audio"
+                      onChange={e => debouncedUpdate('preferredDuration', Number(e.target.value) || 0)}
+                      onBlur={e => { if (e.target.value === '') debouncedUpdate('preferredDuration', 0); }}
+                    />
+                    <span className="text-xs text-muted-foreground">seconds — 0 = match audio length</span>
+                  </div>
+                </Section>
+
+                <Separator />
+
+                {/* Number of videos */}
+                <Section title="Number of Videos to Generate" description="If more than 1, all outputs are saved into a timestamped folder.">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number" min="1" max="20" step="1"
+                      defaultValue={preset.videoCount ?? 1}
+                      disabled={preset.locked}
+                      className="w-24"
+                      onChange={e => debouncedUpdate('videoCount', Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+                    />
+                    <span className="text-xs text-muted-foreground">video{(preset.videoCount ?? 1) !== 1 ? 's' : ''} per generation run</span>
                   </div>
                 </Section>
 

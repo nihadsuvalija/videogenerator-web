@@ -41,6 +41,8 @@ export default function LayoutEditor({ preset, onLayoutChange }) {
   const [dragging, setDragging]  = useState(null);  // { id, startMouseX, startMouseY, startX, startY }
   const [resizing, setResizing]  = useState(null);  // { id, startMouseX, startW }
   const [uploadingOverlay, setUploadingOverlay] = useState(false);
+  const [dimBackground, setDimBackground] = useState(layout?.dimBackground ?? 0);
+  const dimRef       = useRef(layout?.dimBackground ?? 0);
   const canvasRef    = useRef();
   const fileInputRef = useRef();
   const saveTimeout  = useRef();
@@ -48,15 +50,27 @@ export default function LayoutEditor({ preset, onLayoutChange }) {
   // Rebuild elements when preset changes externally
   useEffect(() => {
     setElements(buildElements(layout, preset));
+    const dim = layout?.dimBackground ?? 0;
+    setDimBackground(dim);
+    dimRef.current = dim;
   }, [preset?.id]);
 
   // Debounced save back to parent
   const scheduleLayout = useCallback((newElements) => {
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(() => {
-      onLayoutChange(elementsToLayout(newElements, preset));
+      onLayoutChange(elementsToLayout(newElements, preset, dimRef.current));
     }, 400);
   }, [onLayoutChange, preset]);
+
+  const handleDimChange = useCallback((v) => {
+    dimRef.current = v;
+    setDimBackground(v);
+    if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    saveTimeout.current = setTimeout(() => {
+      onLayoutChange(elementsToLayout(elements, preset, v));
+    }, 400);
+  }, [onLayoutChange, elements, preset]);
 
   const updateElement = useCallback((id, patch) => {
     setElements(prev => {
@@ -202,6 +216,14 @@ export default function LayoutEditor({ preset, onLayoutChange }) {
             <div className="absolute left-1/2 top-0 bottom-0 w-px bg-white" />
           </div>
 
+          {/* Background dim overlay (below elements) */}
+          {dimBackground > 0 && (
+            <div
+              className="absolute inset-0 pointer-events-none bg-black"
+              style={{ opacity: dimBackground }}
+            />
+          )}
+
           {/* Elements */}
           {elements.filter(el => el.visible !== false).map(el => (
             <CanvasElement
@@ -217,6 +239,22 @@ export default function LayoutEditor({ preset, onLayoutChange }) {
 
         {/* Side panel */}
         <div className="flex-1 space-y-3 min-w-0">
+          {/* Background dim control */}
+          <div className="rounded-lg border border-border bg-secondary/30 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-muted-foreground uppercase tracking-widest">Background Dim</Label>
+              <span className="text-xs font-mono text-foreground">{Math.round(dimBackground * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min="0" max="1" step="0.01"
+              value={dimBackground}
+              onChange={e => handleDimChange(parseFloat(e.target.value))}
+              className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-primary bg-border"
+            />
+            <p className="text-xs text-muted-foreground">Darkens the video so text and logo stand out</p>
+          </div>
+
           {/* Element list */}
           <div className="space-y-1">
             {elements.map(el => (
@@ -428,7 +466,7 @@ function buildElements(layout, preset) {
   return elements;
 }
 
-function elementsToLayout(elements, preset) {
+function elementsToLayout(elements, preset, dimBackground = 0) {
   const logo     = elements.find(el => el.id === 'logo');
   const subtitle = elements.find(el => el.id === 'subtitle');
   const overlays = elements.filter(el => el.type === 'overlay').map(el => ({
@@ -456,6 +494,7 @@ function elementsToLayout(elements, preset) {
         enabled:  subtitle?.visible !== false,
       },
       overlays,
+      dimBackground: parseFloat(dimBackground.toFixed(2)),
     }
   };
 }

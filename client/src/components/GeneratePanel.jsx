@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import LyricsPanel from './LyricsPanel';
 import {
   Clapperboard, Play, Upload, RefreshCw, Check, AlertCircle,
-  Download, Trash2, Music, Monitor, FileText, Sliders, Lock, X
+  Download, Trash2, Music, Monitor, FileText, Sliders, Lock, X, Hash
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -27,12 +27,15 @@ const RESOLUTION_ICONS = {
   '2160x3840': '📲',
 };
 
-export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activePreset, onPresetUpdated, onClearPreset }) {
+export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activePreset, onPresetUpdated, onClearPreset, onJobComplete, presets, onApplyPreset, onOpenBatches }) {
   const [logoText, setLogoText]             = useState('');
   const [logoSubtext, setLogoSubtext]       = useState('');
-  const [sliceDuration, setSliceDuration]   = useState(3);
-  const [imageDuration, setImageDuration]   = useState(0.2);
+  const [textMaxChars, setTextMaxChars]     = useState('20');
+  const [preferredDuration, setPreferredDuration] = useState('20');
+  const [sliceDuration, setSliceDuration]   = useState('3');
+  const [imageDuration, setImageDuration]   = useState('0.2');
   const [resolution, setResolution]         = useState('1920x1080');
+  const [videoCount, setVideoCount]         = useState(1);
   const [resolutions, setResolutions]       = useState([]);
   const [batchFiles, setBatchFiles]         = useState({ videos: [], images: [] });
   const [selectedVideos, setSelectedVideos] = useState([]);
@@ -59,13 +62,14 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
   useEffect(() => {
     if (!activePreset) return;
     setResolution(activePreset.resolution || '1920x1080');
-    setSliceDuration(activePreset.sliceDuration ?? 3);
-    setImageDuration(activePreset.imageDuration ?? 0.2);
+    setSliceDuration(String(activePreset.sliceDuration ?? 3));
+    setImageDuration(String(activePreset.imageDuration ?? 0.2));
     setLogoText(activePreset.logoText || '');
     setLogoSubtext(activePreset.logoSubtext || '');
-    // Only override file selections if preset has them
-    if (activePreset.selectedVideos?.length)  setSelectedVideos(activePreset.selectedVideos);
-    if (activePreset.selectedImages?.length)  setSelectedImages(activePreset.selectedImages);
+    setTextMaxChars(String(activePreset.textMaxChars ?? 20));
+    setPreferredDuration(String(activePreset.preferredDuration ?? 20));
+    setVideoCount(activePreset.videoCount ?? 1);
+    // File selections are batch-specific — not loaded from preset
   }, [activePreset?.id]); // re-run only when a different preset is applied
 
   // Auto-save current field values back to active preset (debounced)
@@ -85,12 +89,15 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
 
   // Wrapped setters that also save back to preset
   const setAndSaveResolution = (v) => { setResolution(v); saveBackToPreset({ resolution: v }); };
-  const setAndSaveSlice = (v) => { setSliceDuration(v); saveBackToPreset({ sliceDuration: Number(v) }); };
-  const setAndSaveImageDur = (v) => { setImageDuration(v); saveBackToPreset({ imageDuration: Number(v) }); };
+  const setAndSaveSlice = (v) => { setSliceDuration(v); saveBackToPreset({ sliceDuration: Number(v) || 3 }); };
+  const setAndSaveImageDur = (v) => { setImageDuration(v); saveBackToPreset({ imageDuration: Number(v) || 0.2 }); };
   const setAndSaveLogoText = (v) => { setLogoText(v); saveBackToPreset({ logoText: v }); };
   const setAndSaveLogoSubtext = (v) => { setLogoSubtext(v); saveBackToPreset({ logoSubtext: v }); };
-  const setAndSaveVideos = (v) => { setSelectedVideos(v); saveBackToPreset({ selectedVideos: v }); };
-  const setAndSaveImages = (v) => { setSelectedImages(v); saveBackToPreset({ selectedImages: v }); };
+  const setAndSaveTextMaxChars = (v) => { setTextMaxChars(v); saveBackToPreset({ textMaxChars: Number(v) || 0 }); };
+  const setAndSavePreferredDuration = (v) => { setPreferredDuration(v); saveBackToPreset({ preferredDuration: Number(v) || 0 }); };
+  const setAndSaveVideos    = (v) => { setSelectedVideos(v); }; // not saved to preset — batch-specific
+  const setAndSaveImages    = (v) => { setSelectedImages(v); }; // not saved to preset — batch-specific
+  const setAndSaveVideoCount = (v) => { setVideoCount(v); saveBackToPreset({ videoCount: v }); };
 
   // Load resolutions
   useEffect(() => {
@@ -133,6 +140,7 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
         pollRef.current = setTimeout(poll, 1200);
       } else {
         setGenerating(false);
+        onJobComplete?.(j);
       }
     };
     poll();
@@ -191,10 +199,14 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
           videoFiles: selectedVideos,
           imageFiles: selectedImages,
           logoText, logoSubtext,
-          sliceDuration: Number(sliceDuration),
-          imageDuration: Number(imageDuration),
+          textMaxChars: Number(textMaxChars) || 0,
+          preferredDuration: Number(preferredDuration) || 0,
+          sliceDuration: Number(sliceDuration) || 3,
+          imageDuration: Number(imageDuration) || 0.2,
           resolution,
           sessionToken: SESSION_TOKEN,
+          presetId: activePreset?.id || null,
+          videoCount: Number(videoCount) || 1,
         })
       });
       const { jobId: id } = await res.json();
@@ -206,6 +218,51 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
 
   return (
     <div className="space-y-5">
+      {/* Preset picker */}
+      {presets && presets.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Sliders className="w-4 h-4 text-primary" /> Presets
+            </CardTitle>
+            <CardDescription>Select a preset to load its settings</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 gap-1.5 max-h-48 overflow-y-auto pr-1">
+              {presets.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => onApplyPreset?.(p)}
+                  className={cn(
+                    "flex items-center justify-between px-3 py-2.5 rounded-lg border text-left text-sm transition-all",
+                    activePreset?.id === p.id
+                      ? "border-primary bg-primary/10"
+                      : "border-border hover:border-primary/40 hover:bg-secondary/50"
+                  )}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {activePreset?.id === p.id
+                      ? <Check className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+                      : <div className="w-3.5 h-3.5 rounded-full border border-muted-foreground/30 flex-shrink-0" />
+                    }
+                    <span className={cn("font-medium truncate", activePreset?.id === p.id && "text-primary")}>{p.name}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                    <Badge variant="secondary" className="text-xs mono">{p.resolution}</Badge>
+                    {p.locked && <Lock className="w-3 h-3 text-yellow-400" />}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {activePreset && (
+              <button onClick={onClearPreset} className="mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors">
+                Clear selection ×
+              </button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Active preset banner */}
       {activePreset && (
         <div className={cn(
@@ -233,14 +290,49 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
         </div>
       )}
 
-      {!selectedBatch ? (
-        <div className="rounded-xl border border-dashed border-border p-10 text-center text-muted-foreground">
-          <Clapperboard className="w-10 h-10 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">Select a batch from the left panel to configure generation</p>
-        </div>
-      ) : (
-        <>
-          {/* File selection */}
+      {/* Batch selector */}
+      <Card className={cn(!selectedBatch && "ring-1 ring-primary/40 glow-orange-sm")}>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Clapperboard className="w-4 h-4 text-primary" /> Batch
+          </CardTitle>
+          <CardDescription>Choose which batch of media files to use for generation</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {selectedBatch ? (
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-primary" />
+                <span className="font-mono font-semibold text-sm text-primary">{selectedBatch}</span>
+                {batchFiles.videos.length > 0 && (
+                  <Badge variant="secondary" className="text-xs">{batchFiles.videos.length}v</Badge>
+                )}
+                {batchFiles.images.length > 0 && (
+                  <Badge variant="secondary" className="text-xs">{batchFiles.images.length}i</Badge>
+                )}
+              </div>
+              <button
+                onClick={onOpenBatches}
+                className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1"
+              >
+                Switch batch
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onOpenBatches}
+              className="w-full flex items-center justify-center gap-2 h-12 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 hover:border-primary/70 transition-all text-primary font-semibold text-sm"
+            >
+              <Clapperboard className="w-4 h-4" />
+              Select a Batch
+            </button>
+          )}
+        </CardContent>
+      </Card>
+
+      <>
+        {/* File selection */}
+        {selectedBatch && (
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
@@ -302,8 +394,9 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
               )}
             </CardContent>
           </Card>
+        )}
 
-          {/* Resolution picker */}
+        {/* Resolution picker */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
@@ -349,14 +442,25 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
                   <Label className="text-xs">Video slice duration (sec)</Label>
                   <Input type="number" min="1" max="60" step="1" value={sliceDuration}
                     disabled={locked}
-                    onChange={e => setAndSaveSlice(e.target.value)} />
+                    onChange={e => setAndSaveSlice(e.target.value)}
+                    onBlur={e => { if (e.target.value === '' || isNaN(Number(e.target.value))) setAndSaveSlice('3'); }} />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Image duration (sec)</Label>
                   <Input type="number" min="0.1" max="10" step="0.1" value={imageDuration}
                     disabled={locked}
-                    onChange={e => setAndSaveImageDur(e.target.value)} />
+                    onChange={e => setAndSaveImageDur(e.target.value)}
+                    onBlur={e => { if (e.target.value === '' || isNaN(Number(e.target.value))) setAndSaveImageDur('0.2'); }} />
                 </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs">Preferred output duration (sec) <span className="text-muted-foreground font-normal">— 0 = match audio length</span></Label>
+                <Input type="number" min="0" max="3600" step="1" value={preferredDuration}
+                  disabled={locked}
+                  placeholder="0 = match audio"
+                  onChange={e => setAndSavePreferredDuration(e.target.value)}
+                  onBlur={e => { if (e.target.value === '' || isNaN(Number(e.target.value))) setAndSavePreferredDuration('0'); }} />
               </div>
 
               <Separator />
@@ -386,6 +490,24 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
                     disabled={!!srtFile || locked}
                     className={(srtFile || locked) ? 'opacity-40' : ''}
                   />
+                  <div className="flex items-center gap-2 pt-1">
+                    <Label className="text-xs text-muted-foreground whitespace-nowrap">Max chars / line</Label>
+                    <Input
+                      type="number"
+                      min="0" max="200" step="1"
+                      value={textMaxChars}
+                      onChange={e => setAndSaveTextMaxChars(e.target.value)}
+                      onBlur={e => { if (e.target.value === '' || isNaN(Number(e.target.value))) setAndSaveTextMaxChars('0'); }}
+                      disabled={!!srtFile || locked}
+                      className={(srtFile || locked) ? 'opacity-40 w-24' : 'w-24'}
+                      placeholder="0 = off"
+                    />
+                    {Number(textMaxChars) > 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        wraps at {textMaxChars} chars
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -483,16 +605,39 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
               )}
             </CardContent>
           </Card>
-          <Button className="w-full h-12 text-base font-bold" onClick={generate} disabled={generating || !hasContent}>
-            {generating
-              ? <><RefreshCw className="w-4 h-4 animate-spin" /> Generating...</>
-              : <><Play className="w-4 h-4" /> Generate Video</>
-            }
-          </Button>
+          {/* Number of videos */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Hash className="w-4 h-4 text-primary" /> Number of Videos
+              </CardTitle>
+              <CardDescription>Generate multiple unique videos in one run. If more than 1, outputs are saved in a folder.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-3">
+                <Input
+                  type="number" min="1" max="20" step="1"
+                  value={videoCount}
+                  disabled={locked}
+                  className="w-24"
+                  onChange={e => setAndSaveVideoCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+                />
+                <span className="text-sm text-muted-foreground">
+                  {videoCount > 1 ? `${videoCount} videos will be generated` : 'Single video'}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
 
-          {job && <JobStatus job={job} />}
-        </>
-      )}
+        <Button className="w-full h-12 text-base font-bold" onClick={generate} disabled={generating || !hasContent}>
+          {generating
+            ? <><RefreshCw className="w-4 h-4 animate-spin" /> Generating...</>
+            : <><Play className="w-4 h-4" /> Generate Video</>
+          }
+        </Button>
+
+        {job && <JobStatus job={job} />}
+      </>
     </div>
   );
 }
@@ -548,7 +693,24 @@ function JobStatus({ job }) {
           </div>
         )}
 
-        {job.status === 'done' && job.outputFile && (
+        {job.status === 'done' && job.outputFiles && job.outputFiles.length > 1 ? (
+          <div className="space-y-1.5">
+            <p className="text-xs text-muted-foreground font-medium">
+              {job.outputFiles.length} videos generated{job.outputFolder ? ` → ${job.outputFolder}/` : ''}
+            </p>
+            {job.outputFiles.map((f, i) => (
+              <a
+                key={f}
+                href={`http://localhost:5001/outputs/${f}`}
+                download
+                className="flex items-center justify-between gap-2 w-full px-3 h-9 rounded-md bg-green-500/20 border border-green-500/40 text-green-400 text-xs font-semibold hover:bg-green-500/30 transition-colors"
+              >
+                <span className="mono truncate">{f.split('/').pop()}</span>
+                <Download className="w-3.5 h-3.5 flex-shrink-0" />
+              </a>
+            ))}
+          </div>
+        ) : job.status === 'done' && job.outputFile ? (
           <a
             href={`http://localhost:5001/outputs/${job.outputFile}`}
             download
@@ -556,7 +718,7 @@ function JobStatus({ job }) {
           >
             <Download className="w-4 h-4" /> Download {job.outputFile}
           </a>
-        )}
+        ) : null}
       </CardContent>
     </Card>
   );
