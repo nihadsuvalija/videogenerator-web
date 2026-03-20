@@ -69,7 +69,7 @@ export default function AuthPage() {
           </div>
           <div className="text-center">
             <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: 'Syne' }}>
-              VideoGen <span className="text-primary">Studio</span>
+              Batch<span className="text-primary">lyst</span>
             </h1>
             <p className="text-xs text-muted-foreground mt-0.5">MERN · FFmpeg · Batch Processing</p>
           </div>

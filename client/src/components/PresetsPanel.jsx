@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Sliders, Plus, Trash2, Lock, Unlock, ChevronRight,
   Zap, Check, RefreshCw, Copy, LayoutTemplate, Upload, Image,
-  Film, ImagePlus
+  Film, ImagePlus, Video
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -231,7 +231,10 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
             )}
             {(!preset.presetType || preset.presetType === 'video') && (
               <Badge className="text-xs bg-purple-500/20 text-purple-400 border-purple-500/30">
-                <Film className="w-2.5 h-2.5 mr-1" /> Video
+                {preset.mediaType === 'image'
+                  ? <><Image className="w-2.5 h-2.5 mr-1" /> Image Batch</>
+                  : <><Film className="w-2.5 h-2.5 mr-1" /> Video Batch</>
+                }
               </Badge>
             )}
             {preset.locked && (
@@ -288,37 +291,79 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
           <CardContent className="pt-4">
             {activeTab === 'settings' && (
               <div className="space-y-5">
-                {/* Timing */}
-                <Section title="Timing">
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label="Video slice (sec)">
-                      <Input type="number" min="1" max="120" step="1"
-                        defaultValue={preset.sliceDuration} disabled={preset.locked}
-                        onChange={e => debouncedUpdate('sliceDuration', Number(e.target.value))} />
-                    </Field>
-                    <Field label="Image duration (sec)">
-                      <Input type="number" min="0.1" max="30" step="0.1"
-                        defaultValue={preset.imageDuration} disabled={preset.locked}
-                        onChange={e => debouncedUpdate('imageDuration', Number(e.target.value))} />
-                    </Field>
-                  </div>
-                </Section>
+                {/* ── Video-only: Media Type ── */}
+                {preset.presetType !== 'post' && (
+                  <>
+                    <Section title="Media Type" description="What kind of source files does this template use?">
+                      <div className="flex items-center gap-2">
+                        <button
+                          disabled={preset.locked}
+                          onClick={() => immediateUpdate('mediaType', 'video')}
+                          className={cn(
+                            "flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all",
+                            (preset.mediaType ?? 'video') === 'video'
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border text-muted-foreground hover:border-border/80",
+                            preset.locked && "opacity-50 cursor-not-allowed"
+                          )}
+                        >
+                          <Video className="w-4 h-4" /> Video Batch
+                        </button>
+                        <button
+                          disabled={preset.locked}
+                          onClick={() => immediateUpdate('mediaType', 'image')}
+                          className={cn(
+                            "flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all",
+                            preset.mediaType === 'image'
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border text-muted-foreground hover:border-border/80",
+                            preset.locked && "opacity-50 cursor-not-allowed"
+                          )}
+                        >
+                          <Image className="w-4 h-4" /> Image Batch
+                        </button>
+                      </div>
+                    </Section>
+                    <Separator />
+                  </>
+                )}
 
-                <Separator />
+                {/* ── Video-only: Timing (conditional on media type) ── */}
+                {preset.presetType !== 'post' && (
+                  <>
+                    <Section title="Timing">
+                      {(preset.mediaType ?? 'video') === 'video' ? (
+                        <Field label="Video slice duration (sec)">
+                          <Input type="number" min="1" max="120" step="1"
+                            defaultValue={preset.sliceDuration ?? 3} disabled={preset.locked}
+                            className="w-28"
+                            onChange={e => debouncedUpdate('sliceDuration', Number(e.target.value))} />
+                        </Field>
+                      ) : (
+                        <Field label="Image display duration (sec)">
+                          <Input type="number" min="0.1" max="30" step="0.1"
+                            defaultValue={preset.imageDuration ?? 0.2} disabled={preset.locked}
+                            className="w-28"
+                            onChange={e => debouncedUpdate('imageDuration', Number(e.target.value))} />
+                        </Field>
+                      )}
+                    </Section>
+                    <Separator />
+                  </>
+                )}
 
-                {/* Resolution */}
+                {/* Resolution (all presets) */}
                 <Section title="Resolution">
                   <PresetResolutionPicker
                     preset={preset}
                     onUpdate={onUpdate}
                     locked={preset.locked}
-                    isPost={preset.presetType === 'post'}
                   />
                 </Section>
 
                 <Separator />
 
-                {/* Logo */}
+                {/* Logo (all presets) */}
                 <Section title="Logo Image">
                   <PresetLogoUpload
                     preset={preset}
@@ -328,23 +373,26 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
                   />
                 </Section>
 
-                <Separator />
-
-                {/* Preferred duration */}
-                <Section title="Preferred Output Duration">
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="number" min="0" max="3600" step="1"
-                      defaultValue={preset.preferredDuration ?? 20}
-                      disabled={preset.locked}
-                      className="w-28"
-                      placeholder="0 = match audio"
-                      onChange={e => debouncedUpdate('preferredDuration', Number(e.target.value) || 0)}
-                      onBlur={e => { if (e.target.value === '') debouncedUpdate('preferredDuration', 0); }}
-                    />
-                    <span className="text-xs text-muted-foreground">seconds — 0 = match audio length</span>
-                  </div>
-                </Section>
+                {/* ── Video-only: Preferred output duration ── */}
+                {preset.presetType !== 'post' && (
+                  <>
+                    <Separator />
+                    <Section title="Preferred Output Duration">
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number" min="0" max="3600" step="1"
+                          defaultValue={preset.preferredDuration ?? 20}
+                          disabled={preset.locked}
+                          className="w-28"
+                          placeholder="0 = match audio"
+                          onChange={e => debouncedUpdate('preferredDuration', Number(e.target.value) || 0)}
+                          onBlur={e => { if (e.target.value === '') debouncedUpdate('preferredDuration', 0); }}
+                        />
+                        <span className="text-xs text-muted-foreground">seconds — 0 = match audio length</span>
+                      </div>
+                    </Section>
+                  </>
+                )}
 
                 {preset.locked && (
                   <div className="rounded-lg bg-yellow-500/10 border border-yellow-500/20 px-3 py-2 flex items-center gap-2">
@@ -404,7 +452,9 @@ const ALL_RESOLUTIONS = [
   { key: '2160x3840', label: '2160×3840', sub: '4K Portrait' },
 ];
 
-function PresetResolutionPicker({ preset, onUpdate, locked, isPost }) {
+function PresetResolutionPicker({ preset, onUpdate, locked }) {
+  const isPost = preset.presetType === 'post';
+
   // Derive current selections from resolutionEntries or fall back to single resolution
   const entries = preset.resolutionEntries?.length
     ? preset.resolutionEntries
@@ -418,7 +468,7 @@ function PresetResolutionPicker({ preset, onUpdate, locked, isPost }) {
     onUpdate({
       resolutionEntries: newEntries,
       resolution: newEntries[0]?.key || '1920x1080',
-      ...(isPost ? {} : { videoCount: totalCount }),
+      videoCount: totalCount,
     });
   };
 
@@ -437,16 +487,23 @@ function PresetResolutionPicker({ preset, onUpdate, locked, isPost }) {
     save(entries.map(e => e.key === key ? { ...e, count: Math.max(1, Math.min(20, e.count + delta)) } : e));
   };
 
+  // Posts only support square/portrait resolutions
+  const resolutions = isPost
+    ? ALL_RESOLUTIONS.filter(r => ['1080x1080', '1080x1920', '1920x1080'].includes(r.key))
+    : ALL_RESOLUTIONS;
+
+  const countLabel = isPost ? 'posts' : 'videos';
+
   return (
     <div className="grid grid-cols-1 gap-1.5">
-      {ALL_RESOLUTIONS.map(r => {
+      {resolutions.map(r => {
         const selected = selectedKeys.includes(r.key);
         const count = getCount(r.key);
         return (
           <button key={r.key} disabled={locked}
             onClick={() => toggle(r.key)}
             className={cn(
-              "flex items-center justify-between px-3 py-2 rounded-lg border text-left text-sm transition-all",
+              "flex items-center justify-between px-3 py-2.5 rounded-lg border text-left text-sm transition-all",
               selected ? "border-primary bg-primary/10" : "border-border hover:border-border/80 text-muted-foreground",
               locked && "opacity-50 cursor-not-allowed"
             )}
@@ -458,26 +515,27 @@ function PresetResolutionPicker({ preset, onUpdate, locked, isPost }) {
               )}>
                 {selected && <Check className="w-2.5 h-2.5 text-primary-foreground" />}
               </div>
-              <span className={cn("font-semibold mono text-xs", selected && "text-primary")}>{r.label}</span>
+              <div>
+                <span className={cn("font-semibold mono text-xs", selected && "text-primary")}>{r.label}</span>
+                <span className="text-xs text-muted-foreground ml-2">{r.sub}</span>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">{r.sub}</span>
-              {selected && !isPost && (
-                <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-                  <button
-                    onClick={() => adjustCount(r.key, -1)}
-                    disabled={locked || count <= 1}
-                    className="w-5 h-5 rounded border border-border hover:border-primary/60 text-xs font-bold flex items-center justify-center transition-all disabled:opacity-30"
-                  >−</button>
-                  <span className="w-5 text-center text-xs font-mono font-semibold text-primary">{count}</span>
-                  <button
-                    onClick={() => adjustCount(r.key, 1)}
-                    disabled={locked || count >= 20}
-                    className="w-5 h-5 rounded border border-border hover:border-primary/60 text-xs font-bold flex items-center justify-center transition-all disabled:opacity-30"
-                  >+</button>
-                </div>
-              )}
-            </div>
+            {selected && (
+              <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                <span className="text-xs text-muted-foreground mr-1">{countLabel}:</span>
+                <button
+                  onClick={() => adjustCount(r.key, -1)}
+                  disabled={locked || count <= 1}
+                  className="w-5 h-5 rounded border border-border hover:border-primary/60 hover:bg-primary/10 text-xs font-bold flex items-center justify-center transition-all disabled:opacity-30"
+                >−</button>
+                <span className="w-5 text-center text-xs font-mono font-semibold text-primary">{count}</span>
+                <button
+                  onClick={() => adjustCount(r.key, 1)}
+                  disabled={locked || count >= 20}
+                  className="w-5 h-5 rounded border border-border hover:border-primary/60 hover:bg-primary/10 text-xs font-bold flex items-center justify-center transition-all disabled:opacity-30"
+                >+</button>
+              </div>
+            )}
           </button>
         );
       })}

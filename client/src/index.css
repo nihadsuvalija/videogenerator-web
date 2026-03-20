@@ -147,6 +147,17 @@ body::before {
   100% { transform: translateX(100%); }
 }
 
+/* Indeterminate progress bar */
+@keyframes indeterminate {
+  0%   { transform: translateX(-100%) scaleX(0.4); }
+  40%  { transform: translateX(0%)    scaleX(0.5); }
+  100% { transform: translateX(200%)  scaleX(0.4); }
+}
+.progress-indeterminate {
+  animation: indeterminate 1.6s ease-in-out infinite;
+  transform-origin: left;
+}
+
 /* User dropdown */
 @keyframes dropdownIn {
   from { opacity: 0; transform: translateY(-6px) scale(0.96); }

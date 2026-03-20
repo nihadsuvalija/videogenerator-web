@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ImagePlus, Play, RefreshCw, Check, AlertCircle, Download,
   Lock, Sliders, X, FileText, ChevronDown, ChevronUp,
-  Image, Trash2, Upload, Hash, Type
+  Image, Trash2, Upload, Hash, Type, Sparkles
 } from 'lucide-react';
 import FontPicker from './FontPicker';
 import { Button } from './ui-button';
@@ -44,8 +44,8 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
   const txtInputRef = useRef();
 
   // Settings
-  const [postCount, setPostCount]       = useState(10);
   const [selectedResolutions, setSelectedResolutions] = useState(['1080x1080']);
+  const [resolutionCounts, setResolutionCounts]       = useState({ '1080x1080': 10 });
   const [textMaxChars, setTextMaxChars] = useState(25);
   const [fontFamily, setFontFamily]     = useState('default');
   const [fontSize, setFontSize]         = useState('64');
@@ -55,9 +55,11 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
   const [localLayout, setLocalLayout] = useState(DEFAULT_POST_LAYOUT);
 
   // Job
-  const [generating, setGenerating] = useState(false);
-  const [jobIds, setJobIds]         = useState([]);
-  const [jobs, setJobs]             = useState([]);
+  const [generating, setGenerating]             = useState(false);
+  const [jobIds, setJobIds]                     = useState([]);
+  const [jobs, setJobs]                         = useState([]);
+  const [generatingQuotes, setGeneratingQuotes] = useState(false);
+  const [aiQuoteError, setAiQuoteError]         = useState(null);
   const pollRef   = useRef();
   const saveRef   = useRef();
 
@@ -82,11 +84,15 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
     setActivePreset(preset);
     if (preset.resolutionEntries?.length) {
       setSelectedResolutions(preset.resolutionEntries.map(e => e.key));
+      const counts = {};
+      preset.resolutionEntries.forEach(e => { counts[e.key] = e.count || 1; });
+      setResolutionCounts(counts);
     } else {
-      setSelectedResolutions([preset.resolution || '1080x1080']);
+      const key = preset.resolution || '1080x1080';
+      setSelectedResolutions([key]);
+      setResolutionCounts({ [key]: preset.videoCount || 10 });
     }
     setTextMaxChars(preset.textMaxChars ?? 25);
-    setPostCount(preset.videoCount ?? 10);
     if (preset.fontFamily) setFontFamily(preset.fontFamily);
     if (preset.layout?.subtitles?.fontSize) setFontSize(String(preset.layout.subtitles.fontSize));
     if (preset.layout) setLocalLayout({ ...DEFAULT_POST_LAYOUT, ...preset.layout });
@@ -114,14 +120,16 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
     }, 700);
   }, [activePreset]);
 
-  // Save resolution entries to preset when selection changes
+  // Save resolution entries + counts to preset when selections or counts change
   useEffect(() => {
     if (!activePreset) return;
+    const entries = selectedResolutions.map(key => ({ key, count: resolutionCounts[key] ?? 1 }));
     saveToPreset({
       resolution: selectedResolutions[0],
-      resolutionEntries: selectedResolutions.map(key => ({ key, count: 1 })),
+      resolutionEntries: entries,
+      videoCount: entries.reduce((s, e) => s + e.count, 0),
     });
-  }, [selectedResolutions]); // eslint-disable-line
+  }, [selectedResolutions, resolutionCounts]); // eslint-disable-line
 
   // Layout changes from LayoutEditor
   const handleLayoutChange = useCallback((patch) => {
@@ -156,10 +164,26 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
   // Quote lines for counting
   const quoteLines = quotes.split('\n').map(q => q.trim()).filter(Boolean);
 
-  // Effective output count
-  const maxByImages = selectedImages.length;
-  const maxByQuotes = quoteLines.length > 0 ? quoteLines.length : Infinity;
-  const willGenerate = Math.min(postCount, maxByImages, maxByQuotes);
+  // Total posts across all selected resolutions
+  const totalPosts = selectedResolutions.reduce((s, r) => s + (resolutionCounts[r] ?? 1), 0);
+
+  const toggleResolution = (key) => {
+    setSelectedResolutions(prev => {
+      if (prev.includes(key)) {
+        if (prev.length === 1) return prev;
+        return prev.filter(r => r !== key);
+      }
+      setResolutionCounts(c => ({ ...c, [key]: c[key] ?? 1 }));
+      return [...prev, key];
+    });
+  };
+
+  const adjustPostCount = (key, delta) => {
+    setResolutionCounts(prev => ({
+      ...prev,
+      [key]: Math.max(1, Math.min(100, (prev[key] ?? 1) + delta)),
+    }));
+  };
 
   // Upload a .txt file as quotes
   const handleTxtUpload = (file) => {
@@ -179,7 +203,6 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
         batchName:    selectedBatch,
         imageFiles:   selectedImages,
         quotes,
-        postCount,
         textMaxChars: Number(textMaxChars) || 25,
         layout,
         presetId:   activePreset?.id || null,
@@ -188,10 +211,11 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
       };
       const ids = await Promise.all(
         selectedResolutions.map(async (res) => {
+          const count = resolutionCounts[res] ?? 1;
           const r = await fetch(`${API}/api/generate-posts`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...baseParams, resolution: res }),
+            body: JSON.stringify({ ...baseParams, resolution: res, postCount: count }),
           });
           const { jobId } = await r.json();
           return jobId;
@@ -204,9 +228,9 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
   const locked = activePreset?.locked ?? false;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
 
-      {/* Preset picker */}
+      {/* ── Preset picker (full width) ───────────────────────────────────────── */}
       {presets.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
@@ -216,7 +240,7 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
             <CardDescription>Apply a preset to load layout and settings</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 gap-1.5 max-h-48 overflow-y-auto pr-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-1.5">
               {presets.map(p => (
                 <button
                   key={p.id}
@@ -254,7 +278,7 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
         </Card>
       )}
 
-      {/* Active preset banner */}
+      {/* ── Active preset banner (full width) ───────────────────────────────── */}
       {activePreset && (
         <div className={cn(
           "rounded-lg border px-4 py-3 flex items-center justify-between",
@@ -276,328 +300,364 @@ export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onC
         </div>
       )}
 
-      {/* Batch selector */}
-      <Card className={cn(!selectedBatch && "ring-1 ring-primary/40 glow-orange-sm")}>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Image className="w-4 h-4 text-primary" /> Image Batch
-          </CardTitle>
-          <CardDescription>Select a batch containing the images to use as post backgrounds</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {selectedBatch ? (
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-primary" />
-                <span className="font-mono font-semibold text-sm text-primary">{selectedBatch}</span>
-                {batchFiles.images.length > 0 && (
-                  <Badge variant="secondary" className="text-xs">{batchFiles.images.length} images</Badge>
-                )}
-              </div>
-              <button
-                onClick={onOpenBatches}
-                className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1"
-              >
-                Switch batch
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <button
-                onClick={onOpenBatches}
-                className="w-full flex items-center justify-center gap-2 h-12 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 hover:border-primary/70 transition-all text-primary font-semibold text-sm"
-              >
-                <Image className="w-4 h-4" />
-                Open Batches to Select
-              </button>
-              {batches.length > 0 && (
-                <div className="grid gap-1 max-h-40 overflow-y-auto">
-                  {batches.map(b => (
+      {/* ── 2-column layout ─────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-5 items-start">
+
+        {/* ── LEFT: all settings ──────────────────────────────────────────── */}
+        <div className="space-y-4 min-w-0">
+
+          {/* Batch */}
+          <Card className={cn(!selectedBatch && "ring-1 ring-primary/40 glow-orange-sm")}>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Image className="w-4 h-4 text-primary" /> Image Batch
+              </CardTitle>
+              <CardDescription>Select a batch containing images to use as post backgrounds</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {selectedBatch ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-primary" />
+                    <span className="font-mono font-semibold text-sm text-primary">{selectedBatch}</span>
+                    {batchFiles.images.length > 0 && (
+                      <Badge variant="secondary" className="text-xs">{batchFiles.images.length} images</Badge>
+                    )}
+                  </div>
+                  <button
+                    onClick={onOpenBatches}
+                    className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1"
+                  >
+                    Switch batch
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <button
+                    onClick={onOpenBatches}
+                    className="w-full flex items-center justify-center gap-2 h-12 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 hover:border-primary/70 transition-all text-primary font-semibold text-sm"
+                  >
+                    <Image className="w-4 h-4" /> Select a Batch
+                  </button>
+                  {batches.length > 0 && (
+                    <div className="grid gap-1 max-h-40 overflow-y-auto">
+                      {batches.map(b => (
+                        <button
+                          key={b.name}
+                          onClick={() => setSelectedBatch(b.name)}
+                          className="flex items-center justify-between px-3 py-2 rounded-lg border border-border hover:border-primary/40 hover:bg-secondary/50 text-left text-sm transition-all"
+                        >
+                          <span className="font-mono text-xs font-semibold">{b.name}</span>
+                          <Badge variant="secondary" className="text-xs">{b.imageCount} images</Badge>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Image pool */}
+          {selectedBatch && batchFiles.images.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Image className="w-4 h-4 text-primary" /> Image Pool
+                  </CardTitle>
+                  {!locked && (
+                    <div className="flex gap-2">
+                      <button onClick={() => setSelectedImages(batchFiles.images)} className="text-xs text-primary hover:underline">All</button>
+                      <span className="text-muted-foreground text-xs">·</span>
+                      <button onClick={() => setSelectedImages([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
+                    </div>
+                  )}
+                </div>
+                <CardDescription>{selectedImages.length} of {batchFiles.images.length} selected</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-1 max-h-40 overflow-y-auto pr-1">
+                  {batchFiles.images.map(f => (
                     <button
-                      key={b.name}
-                      onClick={() => setSelectedBatch(b.name)}
-                      className="flex items-center justify-between px-3 py-2 rounded-lg border border-border hover:border-primary/40 hover:bg-secondary/50 text-left text-sm transition-all"
+                      key={f}
+                      onClick={() => !locked && setSelectedImages(prev =>
+                        prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]
+                      )}
+                      disabled={locked}
+                      className={cn(
+                        "flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-all text-left w-full",
+                        selectedImages.includes(f)
+                          ? "border-purple-500/40 bg-purple-500/10 text-purple-300"
+                          : "border-border bg-transparent text-muted-foreground hover:border-border/80",
+                        locked && "opacity-60 cursor-not-allowed"
+                      )}
                     >
-                      <span className="font-mono text-xs font-semibold">{b.name}</span>
-                      <Badge variant="secondary" className="text-xs">{b.imageCount} images</Badge>
+                      <div className={cn("w-3.5 h-3.5 rounded-sm border flex items-center justify-center flex-shrink-0",
+                        selectedImages.includes(f) ? "border-current bg-current/20" : "border-muted-foreground/40")}>
+                        {selectedImages.includes(f) && <Check className="w-2.5 h-2.5" />}
+                      </div>
+                      <span className="mono truncate">{f}</span>
                     </button>
                   ))}
                 </div>
-              )}
-            </div>
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
 
-      {/* Image selection */}
-      {selectedBatch && batchFiles.images.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
+          {/* Resolution + per-resolution post count */}
+          <Card>
+            <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <Image className="w-4 h-4 text-primary" /> Image Pool
+                <ImagePlus className="w-4 h-4 text-primary" /> Resolution
+                {selectedResolutions.length > 1 && (
+                  <Badge className="text-xs bg-primary/20 text-primary border-primary/30">
+                    {selectedResolutions.length} resolutions
+                  </Badge>
+                )}
               </CardTitle>
-              {!locked && (
-                <div className="flex gap-2">
-                  <button onClick={() => setSelectedImages(batchFiles.images)} className="text-xs text-primary hover:underline">All</button>
-                  <span className="text-muted-foreground text-xs">·</span>
-                  <button onClick={() => setSelectedImages([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
+              <CardDescription>Set how many posts to generate per resolution</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-2">
+                {RESOLUTION_OPTIONS.map(r => {
+                  const selected = selectedResolutions.includes(r.key);
+                  const count = resolutionCounts[r.key] ?? 1;
+                  return (
+                    <button
+                      key={r.key}
+                      disabled={locked}
+                      onClick={() => !locked && toggleResolution(r.key)}
+                      className={cn(
+                        "flex items-center justify-between px-3 py-2.5 rounded-lg border text-left text-sm transition-all",
+                        selected ? "border-primary bg-primary/10" : "border-border hover:border-border/80 text-muted-foreground",
+                        locked && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className={cn(
+                          "w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 transition-all",
+                          selected ? "border-primary bg-primary" : "border-muted-foreground/40"
+                        )}>
+                          {selected && <Check className="w-2.5 h-2.5 text-primary-foreground" />}
+                        </div>
+                        <div>
+                          <span className={cn("font-semibold mono text-xs", selected && "text-primary")}>{r.label}</span>
+                          <span className="text-xs text-muted-foreground ml-2">{r.sub}</span>
+                        </div>
+                      </div>
+                      {selected && (
+                        <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                          <span className="text-xs text-muted-foreground mr-1">posts:</span>
+                          <button onClick={() => adjustPostCount(r.key, -1)} disabled={locked || count <= 1}
+                            className="w-5 h-5 rounded border border-border hover:border-primary/60 hover:bg-primary/10 text-xs font-bold flex items-center justify-center transition-all disabled:opacity-30">−</button>
+                          <span className="w-6 text-center text-xs font-mono font-semibold text-primary">{count}</span>
+                          <button onClick={() => adjustPostCount(r.key, 1)} disabled={locked || count >= 100}
+                            className="w-5 h-5 rounded border border-border hover:border-primary/60 hover:bg-primary/10 text-xs font-bold flex items-center justify-center transition-all disabled:opacity-30">+</button>
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Quotes & Text */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-primary" /> Quotes &amp; Text
+                    <Badge variant="secondary" className="text-xs">Optional</Badge>
+                  </CardTitle>
+                  <CardDescription>One per line — each post gets one quote burned in</CardDescription>
                 </div>
-              )}
-            </div>
-            <CardDescription>{selectedImages.length} of {batchFiles.images.length} selected</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-1 max-h-48 overflow-y-auto">
-              {batchFiles.images.map(f => (
-                <button
-                  key={f}
-                  onClick={() => !locked && setSelectedImages(prev =>
-                    prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {quotes && (
+                    <button onClick={() => setQuotes('')} className="text-muted-foreground hover:text-destructive transition-colors p-1">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   )}
-                  disabled={locked}
-                  className={cn(
-                    "flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-all text-left w-full",
-                    selectedImages.includes(f)
-                      ? "border-purple-500/40 bg-purple-500/10 text-purple-300"
-                      : "border-border bg-transparent text-muted-foreground hover:border-border/80",
-                    locked && "opacity-60 cursor-not-allowed"
-                  )}
-                >
-                  <div className={cn("w-3.5 h-3.5 rounded-sm border flex items-center justify-center flex-shrink-0",
-                    selectedImages.includes(f) ? "border-current bg-current/20" : "border-muted-foreground/40")}>
-                    {selectedImages.includes(f) && <Check className="w-2.5 h-2.5" />}
-                  </div>
-                  <span className="mono truncate">{f}</span>
-                </button>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Quotes */}
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2">
-              <FileText className="w-4 h-4 text-primary" /> Quotes
-              <Badge variant="secondary" className="text-xs">Optional</Badge>
-            </CardTitle>
-            {quotes && (
-              <button onClick={() => setQuotes('')} className="text-xs text-muted-foreground hover:text-destructive transition-colors">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-          <CardDescription>One quote per line — each post gets one quote burned in as text</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <textarea
-            value={quotes}
-            onChange={e => setQuotes(e.target.value)}
-            disabled={locked}
-            placeholder={"The only way to do great work is to love what you do.\nIn the middle of every difficulty lies opportunity.\nBe yourself; everyone else is already taken."}
-            rows={5}
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none disabled:opacity-50"
-          />
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">
-              {quoteLines.length > 0 ? `${quoteLines.length} quote${quoteLines.length !== 1 ? 's' : ''} entered` : 'No quotes — posts will have no text'}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => txtInputRef.current?.click()} disabled={locked}>
-                <Upload className="w-3 h-3" /> Upload .txt
-              </Button>
-              <input
-                ref={txtInputRef}
-                type="file"
-                accept=".txt,text/plain"
-                className="hidden"
-                onChange={e => e.target.files[0] && handleTxtUpload(e.target.files[0])}
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Settings */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Generation Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Post count */}
-          <div className="space-y-1.5">
-            <Label className="text-xs uppercase tracking-widest text-muted-foreground">Number of Posts</Label>
-            <div className="flex items-center gap-3">
-              <Input
-                type="number" min="1" max="100" step="1"
-                value={postCount}
-                disabled={locked}
-                className="w-24"
-                onChange={e => setPostCount(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
-              />
-              {selectedImages.length > 0 && (
-                <span className="text-xs text-muted-foreground">
-                  Will generate <span className="text-foreground font-semibold">{isFinite(willGenerate) && willGenerate > 0 ? willGenerate : '—'}</span> post{willGenerate !== 1 ? 's' : ''}
-                  {quoteLines.length > 0 && quoteLines.length < postCount && quoteLines.length < selectedImages.length
-                    ? ' (limited by quotes)'
-                    : selectedImages.length < postCount && (quoteLines.length === 0 || selectedImages.length < quoteLines.length)
-                    ? ' (limited by images)'
-                    : ''}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* Resolution */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs uppercase tracking-widest text-muted-foreground">Resolution</Label>
-              {selectedResolutions.length > 1 && (
-                <span className="text-xs text-muted-foreground">{selectedResolutions.length} resolutions — {selectedResolutions.length} jobs</span>
-              )}
-            </div>
-            <div className="grid gap-1.5">
-              {RESOLUTION_OPTIONS.map(r => {
-                const selected = selectedResolutions.includes(r.key);
-                return (
-                  <button
-                    key={r.key}
-                    disabled={locked}
-                    onClick={() => {
-                      if (!locked) {
-                        setSelectedResolutions(prev => {
-                          if (prev.includes(r.key)) {
-                            if (prev.length === 1) return prev;
-                            return prev.filter(x => x !== r.key);
-                          }
-                          return [...prev, r.key];
+                  <Button
+                    disabled={locked || generatingQuotes}
+                    onClick={async () => {
+                      setAiQuoteError(null);
+                      setGeneratingQuotes(true);
+                      try {
+                        const r = await fetch(`${API}/api/ai/quotes`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ count: totalPosts }),
                         });
+                        const data = await r.json();
+                        if (!r.ok) throw new Error(data.error || 'Unknown error');
+                        setQuotes(data.quotes.join('\n'));
+                      } catch (e) {
+                        setAiQuoteError(e.message);
+                      } finally {
+                        setGeneratingQuotes(false);
                       }
                     }}
-                    className={cn(
-                      "flex items-center justify-between px-3 py-2 rounded-lg border text-left text-sm transition-all",
-                      selected ? "border-primary bg-primary/10" : "border-border hover:border-border/80 text-muted-foreground",
-                      locked && "opacity-50 cursor-not-allowed"
-                    )}
+                    className="h-7 px-2.5 text-xs gap-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white border-0 shadow-md shadow-violet-500/20 disabled:opacity-50"
                   >
-                    <div className="flex items-center gap-2">
-                      <div className={cn(
-                        "w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 transition-all",
-                        selected ? "border-primary bg-primary" : "border-muted-foreground/40"
-                      )}>
-                        {selected && <Check className="w-2.5 h-2.5 text-primary-foreground" />}
-                      </div>
-                      <span className={cn("font-semibold mono text-xs", selected && "text-primary")}>{r.label}</span>
-                    </div>
-                    <span className="text-xs text-muted-foreground">{r.sub}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* Text wrap */}
-          <div className="space-y-1.5">
-            <Label className="text-xs uppercase tracking-widest text-muted-foreground">Quote Line Width</Label>
-            <div className="flex items-center gap-3">
-              <Input
-                type="number" min="10" max="80" step="1"
-                value={textMaxChars}
+                    {generatingQuotes
+                      ? <><RefreshCw className="w-3 h-3 animate-spin" /> AI…</>
+                      : <><Sparkles className="w-3 h-3" /> AI ({totalPosts})</>
+                    }
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => txtInputRef.current?.click()} disabled={locked} className="h-7 px-2 text-xs">
+                    <Upload className="w-3 h-3" />
+                  </Button>
+                  <input
+                    ref={txtInputRef}
+                    type="file"
+                    accept=".txt,text/plain"
+                    className="hidden"
+                    onChange={e => e.target.files[0] && handleTxtUpload(e.target.files[0])}
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {aiQuoteError && (
+                <p className="text-xs text-red-400 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3 flex-shrink-0" /> {aiQuoteError}
+                </p>
+              )}
+              <textarea
+                value={quotes}
+                onChange={e => setQuotes(e.target.value)}
                 disabled={locked}
-                className="w-24"
-                onChange={e => setTextMaxChars(Math.max(10, Math.min(80, Number(e.target.value) || 25)))}
+                placeholder={"The only way to do great work is to love what you do.\nIn the middle of every difficulty lies opportunity.\nBe yourself; everyone else is already taken."}
+                rows={4}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y mono disabled:opacity-50"
               />
-              <span className="text-xs text-muted-foreground">max characters per line before wrapping</span>
+              {quoteLines.length > 0 && (
+                <p className="text-xs text-muted-foreground">{quoteLines.length} quote{quoteLines.length !== 1 ? 's' : ''}</p>
+              )}
+              <Separator />
+              <div className="space-y-3">
+                <Label className="text-xs uppercase tracking-widest text-muted-foreground flex items-center gap-1.5"><Type className="w-3 h-3" /> Font</Label>
+                <FontPicker
+                  value={fontFamily}
+                  onChange={(v) => { setFontFamily(v); if (activePreset) saveToPreset({ fontFamily: v }); }}
+                  previewText={quotes}
+                  disabled={locked}
+                />
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs text-muted-foreground whitespace-nowrap">Size (px)</Label>
+                    <Input
+                      type="number" min="12" max="300" step="1"
+                      value={fontSize}
+                      onChange={e => setFontSize(e.target.value)}
+                      onBlur={e => { if (!e.target.value || isNaN(Number(e.target.value))) setFontSize('64'); }}
+                      disabled={locked}
+                      className="w-20"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs text-muted-foreground whitespace-nowrap">Max chars / line</Label>
+                    <Input
+                      type="number" min="10" max="80" step="1"
+                      value={textMaxChars}
+                      disabled={locked}
+                      className="w-20"
+                      onChange={e => setTextMaxChars(Math.max(10, Math.min(80, Number(e.target.value) || 25)))}
+                    />
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Layout editor */}
+          <Card>
+            <button
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-secondary/30 transition-colors"
+              onClick={() => setShowLayout(v => !v)}
+            >
+              <div className="flex items-center gap-2">
+                <Hash className="w-4 h-4 text-primary" />
+                <span className="text-sm font-semibold">Layout Editor</span>
+                <span className="text-xs text-muted-foreground">— position quote text, logo, overlays</span>
+              </div>
+              {showLayout
+                ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                : <ChevronDown className="w-4 h-4 text-muted-foreground" />
+              }
+            </button>
+            {showLayout && (
+              <CardContent className="pt-0 border-t border-border">
+                <p className="text-xs text-muted-foreground mt-3 mb-4">
+                  Drag elements on the canvas to set positions. The <strong>Subtitles / Text</strong> element controls where quotes appear.
+                  {!activePreset && ' Changes are local — apply a preset to save the layout persistently.'}
+                </p>
+                <LayoutEditor
+                  preset={layoutPreset}
+                  onLayoutChange={handleLayoutChange}
+                  onFontChange={(patch) => { if (patch.fontFamily) { setFontFamily(patch.fontFamily); if (activePreset) saveToPreset(patch); } }}
+                />
+              </CardContent>
+            )}
+          </Card>
+
+        </div>{/* end LEFT */}
+
+        {/* ── RIGHT: Generate + Log (sticky) ──────────────────────────────── */}
+        <div className="space-y-4 lg:sticky lg:top-20 [will-change:transform]">
+
+          {/* Generate button */}
+          <Button
+            className="w-full h-14 text-base font-bold gap-2 shadow-lg"
+            onClick={generate}
+            disabled={generating || selectedImages.length === 0 || !selectedBatch}
+          >
+            {generating ? (
+              <><RefreshCw className="w-5 h-5 animate-spin" /> Generating Posts…</>
+            ) : (
+              <><ImagePlus className="w-5 h-5" /> Generate {totalPosts} Post{totalPosts !== 1 ? 's' : ''}{selectedResolutions.length > 1 ? ` — ${selectedResolutions.length} resolutions` : ''}</>
+            )}
+          </Button>
+
+          {/* Generation Log */}
+          <div className="rounded-xl border border-border overflow-hidden bg-card">
+            <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ImagePlus className="w-4 h-4 text-primary" />
+                <span className="text-sm font-semibold">Generation Log</span>
+              </div>
+              {jobs.length > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {jobs.filter(j => j.status === 'running').length > 0
+                    ? `${jobs.filter(j => j.status === 'running').length} running`
+                    : `${jobs.length} job${jobs.length !== 1 ? 's' : ''}`}
+                </Badge>
+              )}
             </div>
+
+            {jobs.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-14 px-6 text-center">
+                <div className="w-12 h-12 rounded-full bg-secondary/50 flex items-center justify-center mb-3">
+                  <ImagePlus className="w-5 h-5 text-muted-foreground/50" />
+                </div>
+                <p className="text-sm font-medium text-muted-foreground">Ready to generate</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">
+                  {!selectedBatch ? 'Select a batch to get started' : selectedImages.length === 0 ? 'Select images from the batch' : 'Click Generate when ready'}
+                </p>
+              </div>
+            ) : (
+              <div className="p-3 space-y-3 max-h-[calc(100vh-280px)] overflow-y-auto">
+                {jobs.map(j => <PostJobStatus key={j.id} job={j} />)}
+              </div>
+            )}
           </div>
 
-          <Separator />
+        </div>{/* end RIGHT */}
 
-          {/* Font */}
-          <div className="space-y-2">
-            <Label className="text-xs uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
-              <Type className="w-3 h-3" /> Font
-            </Label>
-            <FontPicker
-              value={fontFamily}
-              onChange={(v) => { setFontFamily(v); if (activePreset) saveToPreset({ fontFamily: v }); }}
-              previewText={quotes}
-              disabled={locked}
-            />
-            <div className="flex items-center gap-2 mt-1">
-              <Label className="text-xs text-muted-foreground whitespace-nowrap">Font size (px at 1080p)</Label>
-              <Input
-                type="number" min="12" max="300" step="1"
-                value={fontSize}
-                onChange={e => setFontSize(e.target.value)}
-                onBlur={e => { if (!e.target.value || isNaN(Number(e.target.value))) setFontSize('64'); }}
-                disabled={locked}
-                className="w-24"
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Layout editor */}
-      <Card>
-        <button
-          className="w-full flex items-center justify-between px-4 py-3 hover:bg-secondary/30 transition-colors"
-          onClick={() => setShowLayout(v => !v)}
-        >
-          <div className="flex items-center gap-2">
-            <Hash className="w-4 h-4 text-primary" />
-            <span className="text-sm font-semibold">Layout Editor</span>
-            <span className="text-xs text-muted-foreground">— position quote text, logo, overlays</span>
-          </div>
-          {showLayout
-            ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
-            : <ChevronDown className="w-4 h-4 text-muted-foreground" />
-          }
-        </button>
-        {showLayout && (
-          <CardContent className="pt-0 border-t border-border">
-            <p className="text-xs text-muted-foreground mt-3 mb-4">
-              Drag elements on the canvas to set positions. The <strong>Subtitles / Text</strong> element controls where quotes appear.
-              {!activePreset && ' Changes are local — apply a preset to save the layout persistently.'}
-            </p>
-            <LayoutEditor
-              preset={layoutPreset}
-              onLayoutChange={handleLayoutChange}
-              onFontChange={(patch) => { if (patch.fontFamily) { setFontFamily(patch.fontFamily); if (activePreset) saveToPreset(patch); } }}
-            />
-          </CardContent>
-        )}
-      </Card>
-
-      {/* Generate button */}
-      <Button
-        className="w-full h-12 text-base font-bold"
-        onClick={generate}
-        disabled={generating || selectedImages.length === 0 || !selectedBatch}
-      >
-        {generating ? (
-          <><RefreshCw className="w-4 h-4 animate-spin" /> Generating Posts...</>
-        ) : selectedResolutions.length > 1 ? (
-          <><ImagePlus className="w-4 h-4" /> Generate Posts — {selectedResolutions.length} resolutions</>
-        ) : (
-          <><ImagePlus className="w-4 h-4" /> Generate {isFinite(willGenerate) && willGenerate > 0 ? willGenerate : ''} Post{willGenerate !== 1 ? 's' : ''}</>
-        )}
-      </Button>
-
-      {/* Job status */}
-      {jobs.length > 0 && (
-        <div className="space-y-3">
-          {jobs.map(j => <PostJobStatus key={j.id} job={j} />)}
-        </div>
-      )}
+      </div>{/* end grid */}
     </div>
   );
 }

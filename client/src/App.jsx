@@ -134,7 +134,7 @@ export default function App() {
       <Toast toasts={toasts} onDismiss={dismissToast} />
 
       {/* ── Header ── */}
-      <header className="border-b border-border sticky top-0 z-50 bg-background/80 backdrop-blur-md">
+      <header className="border-b border-border sticky top-0 z-50 bg-background/80 backdrop-blur-md [will-change:transform]">
         <div className="max-w-7xl mx-auto px-6 h-14 flex items-center gap-4">
 
           {/* Logo */}
@@ -143,7 +143,7 @@ export default function App() {
               <Clapperboard className="w-3.5 h-3.5 text-primary-foreground" />
             </div>
             <span className="text-sm font-bold tracking-tight hidden sm:block" style={{ fontFamily: 'Syne' }}>
-              VideoGen <span className="text-primary">Studio</span>
+              Batch<span className="text-primary">lyst</span>
             </span>
           </div>
 
@@ -225,7 +225,7 @@ export default function App() {
         )}
 
         {activeTab === 'generate' && (
-          <div className="max-w-3xl mx-auto">
+          <div className="max-w-7xl mx-auto">
             <SectionHeader icon={<Zap className="w-4 h-4 text-primary" />} label="Video Generation" />
             <GeneratePanel
               selectedBatch={selectedBatch}
@@ -242,7 +242,7 @@ export default function App() {
         )}
 
         {activeTab === 'posts' && (
-          <div className="max-w-3xl mx-auto">
+          <div className="max-w-7xl mx-auto">
             <SectionHeader icon={<ImagePlus className="w-4 h-4 text-primary" />} label="Posts" />
             <PostsPanel
               batches={batches}

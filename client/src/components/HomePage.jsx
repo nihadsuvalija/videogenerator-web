@@ -226,9 +226,15 @@ export default function HomePage({ user, onNavigate }) {
           </div>
         )}
 
+        {loading && (
+          <div className="h-1 bg-muted rounded-full overflow-hidden mb-6">
+            <div className="h-full w-1/2 bg-primary rounded-full progress-indeterminate" />
+          </div>
+        )}
+
         {loading ? (
-          <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
-            <RefreshCw className="w-4 h-4 animate-spin" /> Loading…
+          <div className="flex items-center justify-center py-10 text-muted-foreground gap-2 text-xs">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Loading…
           </div>
         ) : activeJobs.length === 0 && filteredJobs.length === 0 ? (
           doneJobs.length === 0
@@ -386,10 +392,14 @@ function JobCard({ job, onReplicate }) {
   const count       = files.length;
   const aspectRatio = resolveAspect(job);
 
-  const [idx, setIdx]       = useState(0);
+  const [idx, setIdx]             = useState(0);
   const [replicating, setReplicating] = useState(false);
-  const videoRef            = useRef(null);
-  const current             = files[idx];
+  const [mediaLoaded, setMediaLoaded] = useState(false);
+  const videoRef                  = useRef(null);
+  const current                   = files[idx];
+
+  // Reset media-loaded state when the current file changes
+  useEffect(() => { setMediaLoaded(false); }, [current]);
 
   useEffect(() => {
     if (videoRef.current) {
@@ -411,9 +421,23 @@ function JobCard({ job, onReplicate }) {
     <div className="rounded-xl border border-border bg-card overflow-hidden group hover:border-border/80 transition-all">
       {/* Thumbnail / carousel */}
       <div className="relative bg-muted overflow-hidden" style={{ aspectRatio }}>
+        {/* Media loading shimmer */}
+        {current && !mediaLoaded && (
+          <div className="absolute inset-0 z-10 bg-muted">
+            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-primary/5 to-transparent animate-[shimmer_1.8s_infinite]" />
+          </div>
+        )}
+
         {current ? (
           isImage(current) ? (
-            <img key={current} src={`${API}/outputs/${current}`} alt="" className="w-full h-auto block fade-in" loading="lazy" />
+            <img
+              key={current}
+              src={`${API}/outputs/${current}`}
+              alt=""
+              className="w-full h-auto block fade-in"
+              loading="lazy"
+              onLoad={() => setMediaLoaded(true)}
+            />
           ) : (
             <video
               key={current}
@@ -422,6 +446,7 @@ function JobCard({ job, onReplicate }) {
               className="w-full h-auto block fade-in"
               preload="metadata"
               muted
+              onLoadedMetadata={() => setMediaLoaded(true)}
               onMouseEnter={e => e.currentTarget.play()}
               onMouseLeave={e => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
             />

@@ -885,7 +885,7 @@ async function runGeneration(job, opts) {
       if (staticOverlays.length) await addLog(`Static overlays: ${staticOverlays.length}`);
     }
 
-    const esc = (s) => (s || '').replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+    const esc = (s) => (s || '').replace(/\\/g, '\\\\').replace(/'/g, '\u2019').replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/%/g, '\\%');
     const safeText = esc(logoText);
     const safeSub  = esc(logoSubtext);
 
@@ -934,7 +934,7 @@ async function runGeneration(job, opts) {
       // Subtitles (ASS burned in final pass, plain text here)
       const activeText = quoteText || logoText || '';
       if (!assPath && activeText) {
-        const escLine = (l) => l.replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+        const escLine = (l) => l.replace(/\\/g, '\\\\').replace(/'/g, '\u2019').replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/%/g, '\\%');
         const mainLines = wrapText(activeText, textMaxChars).map(escLine);
         const subLines  = (!quoteText && logoSubtext && safeSub) ? wrapText(logoSubtext || '', textMaxChars).map(escLine) : [];
 
@@ -1632,6 +1632,65 @@ app.get('/api/ollama/status', async (req, res) => {
   }
 });
 
+app.post('/api/ai/quotes', async (req, res) => {
+  const { count = 1, topic = '' } = req.body;
+
+  // Pick the best llama3 model available
+  let model = 'llama3';
+  try {
+    const tagsRes = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    if (tagsRes.ok) {
+      const { models = [] } = await tagsRes.json();
+      const llama3 = models.find(m => m.name.includes('llama3'));
+      const llama  = models.find(m => m.name.includes('llama'));
+      if (llama3) model = llama3.name;
+      else if (llama) model = llama.name;
+    }
+  } catch {}
+
+  const topicLine = topic ? ` about the theme: "${topic}"` : '';
+  const prompt =
+`Generate exactly ${count} unique, powerful quotes${topicLine} suitable for social media videos.
+
+Rules:
+- Output ONLY the quotes, one per line
+- No numbering, no bullet points, no quotation marks, no labels
+- Each quote must be between 5 and 15 words
+- Make them motivational, punchy, and impactful
+- Do not repeat similar ideas
+
+Quotes:`;
+
+  try {
+    const ollamaRes = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        options: { temperature: 0.85, top_p: 0.9, num_predict: count * 30 },
+      }),
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!ollamaRes.ok) return res.status(500).json({ error: `Ollama error: ${await ollamaRes.text()}` });
+    const data = await ollamaRes.json();
+
+    // Strip numbering/bullets and blank lines, keep up to `count` lines
+    const lines = (data.response || '')
+      .split('\n')
+      .map(l => l.replace(/^[\d]+[\.\)]\s*/, '').replace(/^[-•*]\s*/, '').trim())
+      .filter(l => l.length > 3);
+
+    res.json({ quotes: lines.slice(0, count), model });
+  } catch (e) {
+    if (e.name === 'TimeoutError') return res.status(504).json({ error: 'Ollama timed out — is it running?' });
+    if (e.cause?.code === 'ECONNREFUSED' || e.message === 'fetch failed')
+      return res.status(503).json({ error: 'Ollama is not running. Start it with: ollama serve' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/metadata/generate', async (req, res) => {
   const { platform, topic, tone, extraContext, model } = req.body;
   if (!platform || !topic) return res.status(400).json({ error: 'platform and topic required' });
@@ -1782,7 +1841,7 @@ async function runRerender(newJob, sourceJob, opts) {
       const fontSz = Math.round(40 * sf);
 
       const drawtextFilters = annotations.map(a => {
-        const safeText = (a.text || '').replace(/'/g, "\\'").replace(/:/g, '\\:');
+        const safeText = (a.text || '').replace(/\\/g, '\\\\').replace(/'/g, '\u2019').replace(/:/g, '\\:').replace(/%/g, '\\%');
         const xPx = Math.round((a.x / 100) * W);
         const yPx = Math.round((a.y / 100) * H);
         const xExpr = a.x === 50 ? '(w-text_w)/2' : `${xPx}`;
