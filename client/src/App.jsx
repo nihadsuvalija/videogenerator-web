@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Clapperboard, History, Zap, Sparkles, Sliders, Film,
+  Clapperboard, History, Zap, Sliders,
   FolderOpen, ImagePlus, Home, LogOut, ChevronDown,
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
@@ -9,10 +9,8 @@ import HomePage from './components/HomePage';
 import BatchManager from './components/BatchManager';
 import GeneratePanel from './components/GeneratePanel';
 import JobHistory from './components/JobHistory';
-import MetadataGenerator from './components/MetadataGenerator';
 import PostsPanel from './components/PostsPanel';
 import PresetsPanel from './components/PresetsPanel';
-import VideoEditor from './components/VideoEditor';
 import Toast from './components/Toast';
 import { cn } from './lib/utils';
 
@@ -26,12 +24,11 @@ export default function App() {
   const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
   const [activePreset, setActivePreset]             = useState(null);
   const [presets, setPresets]                       = useState([]);
-  const [editorJobId, setEditorJobId]               = useState(null);
   const [toasts, setToasts]                         = useState([]);
   const [userMenuOpen, setUserMenuOpen]             = useState(false);
 
   // ── Hash-based tab routing so browser Back/Forward works ──────────────────
-  const VALID_TABS = ['home','generate','posts','batches','editor','presets','metadata','history'];
+  const VALID_TABS = ['home','generate','posts','batches','presets','history'];
   const getTabFromHash = () => {
     const hash = window.location.hash.replace('#', '');
     return VALID_TABS.includes(hash) ? hash : 'home';
@@ -50,8 +47,6 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  // Prefill state for replicate
-  const [replicateParams, setReplicateParams] = useState(null);
 
   const loadBatches = async () => {
     const res = await fetch(`${API}/api/batches`);
@@ -65,18 +60,14 @@ export default function App() {
 
   const handleApplyPreset = (preset) => {
     setActivePreset(preset);
-    setActiveTab('generate');
+    setActiveTab(preset.presetType === 'post' ? 'posts' : 'generate');
     setPresets(prev => prev.map(p => p.id === preset.id ? preset : p));
   };
+
 
   const handlePresetUpdated = (patch) => {
     if (!activePreset) return;
     setActivePreset(prev => ({ ...prev, ...patch }));
-  };
-
-  const handleOpenEditor = (jobId) => {
-    setEditorJobId(jobId);
-    setActiveTab('editor');
   };
 
   const handleJobComplete = useCallback((job) => {
@@ -99,30 +90,11 @@ export default function App() {
 
   const loadPresets = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/presets`);
+      const res = await fetch(`${API}/api/presets?type=video`);
       setPresets(await res.json());
     } catch {}
   }, []);
 
-  // Replicate a job: load its preset (if any) and navigate to the right tab
-  const handleReplicate = useCallback(async (job) => {
-    const params = job.generationParams || {};
-    // If the job had a preset, load it
-    if (job.presetId) {
-      try {
-        const res = await fetch(`${API}/api/presets/${job.presetId}`);  // not a real route, fallback below
-        if (!res.ok) throw new Error();
-        const preset = await res.json();
-        setActivePreset(preset);
-      } catch {
-        // preset may have been deleted — still replicate with params
-      }
-    }
-    setReplicateParams(params);
-    setActiveTab(job.type === 'post' ? 'posts' : 'generate');
-    // Brief scroll to top
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, []);
 
   // On first mount after login, set hash if missing
   useEffect(() => {
@@ -153,9 +125,7 @@ export default function App() {
   // ── Utility tabs (right nav group)
   const utilityTabs = [
     { id: 'batches',  icon: <FolderOpen className="w-3.5 h-3.5" />, label: 'Batches' },
-    { id: 'editor',   icon: <Film className="w-3.5 h-3.5" />,       label: 'Editor',  dot: !!editorJobId },
     { id: 'presets',  icon: <Sliders className="w-3.5 h-3.5" />,    label: 'Presets' },
-    { id: 'metadata', icon: <Sparkles className="w-3.5 h-3.5" />,   label: 'Metadata' },
     { id: 'history',  icon: <History className="w-3.5 h-3.5" />,    label: 'History' },
   ];
 
@@ -251,7 +221,6 @@ export default function App() {
           <HomePage
             user={user}
             onNavigate={setActiveTab}
-            onReplicate={handleReplicate}
           />
         )}
 
@@ -268,8 +237,6 @@ export default function App() {
               presets={presets}
               onApplyPreset={handleApplyPreset}
               onOpenBatches={() => setActiveTab('batches')}
-              replicateParams={replicateParams}
-              onReplicateConsumed={() => setReplicateParams(null)}
             />
           </div>
         )}
@@ -277,7 +244,12 @@ export default function App() {
         {activeTab === 'posts' && (
           <div className="max-w-3xl mx-auto">
             <SectionHeader icon={<ImagePlus className="w-4 h-4 text-primary" />} label="Posts" />
-            <PostsPanel batches={batches} onOpenBatches={() => setActiveTab('batches')} />
+            <PostsPanel
+              batches={batches}
+              onOpenBatches={() => setActiveTab('batches')}
+              incomingPreset={activePreset?.presetType === 'post' ? activePreset : null}
+              onClearIncomingPreset={() => setActivePreset(null)}
+            />
           </div>
         )}
 
@@ -294,27 +266,6 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'editor' && (
-          <div>
-            <SectionHeader icon={<Film className="w-4 h-4 text-primary" />} label="Video Editor" />
-            {editorJobId ? (
-              <VideoEditor
-                jobId={editorJobId}
-                onBack={() => { setEditorJobId(null); setActiveTab('history'); }}
-              />
-            ) : (
-              <div className="text-center py-20 text-muted-foreground">
-                <Film className="w-12 h-12 mx-auto mb-4 opacity-20" />
-                <p className="text-sm">No video loaded.</p>
-                <p className="text-xs mt-1 opacity-60">Go to History and click <strong>Edit</strong> on a completed job.</p>
-                <button onClick={() => setActiveTab('history')} className="mt-4 text-sm text-primary hover:underline">
-                  Open History →
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
         {activeTab === 'presets' && (
           <div className="max-w-4xl mx-auto">
             <SectionHeader icon={<Sliders className="w-4 h-4 text-primary" />} label="Presets" />
@@ -322,17 +273,10 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'metadata' && (
-          <div className="max-w-2xl mx-auto">
-            <SectionHeader icon={<Sparkles className="w-4 h-4 text-primary" />} label="AI Metadata" />
-            <MetadataGenerator />
-          </div>
-        )}
-
         {activeTab === 'history' && (
           <div className="max-w-3xl mx-auto">
             <SectionHeader icon={<History className="w-4 h-4 text-primary" />} label="Job History" />
-            <JobHistory onOpenEditor={handleOpenEditor} />
+            <JobHistory />
           </div>
         )}
 

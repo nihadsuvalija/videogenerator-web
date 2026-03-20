@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ImagePlus, Play, RefreshCw, Check, AlertCircle, Download,
   Lock, Sliders, X, FileText, ChevronDown, ChevronUp,
-  Image, Trash2, Upload, Hash
+  Image, Trash2, Upload, Hash, Type
 } from 'lucide-react';
+import FontPicker from './FontPicker';
 import { Button } from './ui-button';
 import {
   Card, CardContent, CardHeader, CardTitle, CardDescription,
@@ -28,7 +29,7 @@ const DEFAULT_POST_LAYOUT = {
   dimBackground: 0,
 };
 
-export default function PostsPanel({ batches, onOpenBatches }) {
+export default function PostsPanel({ batches, onOpenBatches, incomingPreset, onClearIncomingPreset }) {
   // Presets (self-managed, independent from video generation)
   const [presets, setPresets]         = useState([]);
   const [activePreset, setActivePreset] = useState(null);
@@ -44,8 +45,10 @@ export default function PostsPanel({ batches, onOpenBatches }) {
 
   // Settings
   const [postCount, setPostCount]       = useState(10);
-  const [resolution, setResolution]     = useState('1080x1080');
+  const [selectedResolutions, setSelectedResolutions] = useState(['1080x1080']);
   const [textMaxChars, setTextMaxChars] = useState(25);
+  const [fontFamily, setFontFamily]     = useState('default');
+  const [fontSize, setFontSize]         = useState('64');
 
   // Layout
   const [showLayout, setShowLayout]   = useState(false);
@@ -53,14 +56,14 @@ export default function PostsPanel({ batches, onOpenBatches }) {
 
   // Job
   const [generating, setGenerating] = useState(false);
-  const [jobId, setJobId]           = useState(null);
-  const [job, setJob]               = useState(null);
+  const [jobIds, setJobIds]         = useState([]);
+  const [jobs, setJobs]             = useState([]);
   const pollRef   = useRef();
   const saveRef   = useRef();
 
-  // Load presets
+  // Load post presets only
   useEffect(() => {
-    fetch(`${API}/api/presets`).then(r => r.json()).then(setPresets).catch(() => {});
+    fetch(`${API}/api/presets?type=post`).then(r => r.json()).then(setPresets).catch(() => {});
   }, []);
 
   // Load batch image files when batch changes
@@ -77,11 +80,25 @@ export default function PostsPanel({ batches, onOpenBatches }) {
   // Apply a preset
   const applyPreset = useCallback((preset) => {
     setActivePreset(preset);
-    setResolution(preset.resolution || '1080x1080');
+    if (preset.resolutionEntries?.length) {
+      setSelectedResolutions(preset.resolutionEntries.map(e => e.key));
+    } else {
+      setSelectedResolutions([preset.resolution || '1080x1080']);
+    }
     setTextMaxChars(preset.textMaxChars ?? 25);
     setPostCount(preset.videoCount ?? 10);
+    if (preset.fontFamily) setFontFamily(preset.fontFamily);
+    if (preset.layout?.subtitles?.fontSize) setFontSize(String(preset.layout.subtitles.fontSize));
     if (preset.layout) setLocalLayout({ ...DEFAULT_POST_LAYOUT, ...preset.layout });
   }, []);
+
+  // Apply preset pushed from the Presets page (via App.jsx)
+  useEffect(() => {
+    if (incomingPreset) {
+      applyPreset(incomingPreset);
+      onClearIncomingPreset?.();
+    }
+  }, [incomingPreset]);
 
   // Debounced save back to active preset
   const saveToPreset = useCallback((patch) => {
@@ -97,6 +114,15 @@ export default function PostsPanel({ batches, onOpenBatches }) {
     }, 700);
   }, [activePreset]);
 
+  // Save resolution entries to preset when selection changes
+  useEffect(() => {
+    if (!activePreset) return;
+    saveToPreset({
+      resolution: selectedResolutions[0],
+      resolutionEntries: selectedResolutions.map(key => ({ key, count: 1 })),
+    });
+  }, [selectedResolutions]); // eslint-disable-line
+
   // Layout changes from LayoutEditor
   const handleLayoutChange = useCallback((patch) => {
     if (patch.layout) setLocalLayout(patch.layout);
@@ -105,17 +131,19 @@ export default function PostsPanel({ batches, onOpenBatches }) {
 
   // Synthetic preset for LayoutEditor (real preset or local state wrapper)
   const layoutPreset = activePreset
-    ? { ...activePreset, resolution }
-    : { id: null, resolution, layout: localLayout };
+    ? { ...activePreset, resolution: selectedResolutions[0] }
+    : { id: null, resolution: selectedResolutions[0], layout: localLayout };
 
-  // Poll job status
+  // Poll all active job statuses
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobIds.length) return;
     const poll = async () => {
-      const res = await fetch(`${API}/api/jobs/${jobId}`);
-      const j   = await res.json();
-      setJob(j);
-      if (j.status !== 'done' && j.status !== 'error') {
+      const results = await Promise.all(
+        jobIds.map(id => fetch(`${API}/api/jobs/${id}`).then(r => r.json()))
+      );
+      setJobs(results);
+      const anyActive = results.some(j => j.status !== 'done' && j.status !== 'error');
+      if (anyActive) {
         pollRef.current = setTimeout(poll, 1200);
       } else {
         setGenerating(false);
@@ -123,7 +151,7 @@ export default function PostsPanel({ batches, onOpenBatches }) {
     };
     poll();
     return () => clearTimeout(pollRef.current);
-  }, [jobId]);
+  }, [jobIds]);
 
   // Quote lines for counting
   const quoteLines = quotes.split('\n').map(q => q.trim()).filter(Boolean);
@@ -143,25 +171,33 @@ export default function PostsPanel({ batches, onOpenBatches }) {
   const generate = async () => {
     if (!selectedBatch || selectedImages.length === 0) return;
     setGenerating(true);
-    setJob(null);
+    setJobs([]);
+    setJobIds([]);
     const layout = activePreset?.layout || localLayout;
     try {
-      const res = await fetch(`${API}/api/generate-posts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          batchName:    selectedBatch,
-          imageFiles:   selectedImages,
-          quotes,
-          postCount,
-          resolution,
-          textMaxChars: Number(textMaxChars) || 25,
-          layout,
-          presetId: activePreset?.id || null,
-        }),
-      });
-      const { jobId: id } = await res.json();
-      setJobId(id);
+      const baseParams = {
+        batchName:    selectedBatch,
+        imageFiles:   selectedImages,
+        quotes,
+        postCount,
+        textMaxChars: Number(textMaxChars) || 25,
+        layout,
+        presetId:   activePreset?.id || null,
+        fontFamily,
+        fontSize:   Number(fontSize) || 64,
+      };
+      const ids = await Promise.all(
+        selectedResolutions.map(async (res) => {
+          const r = await fetch(`${API}/api/generate-posts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...baseParams, resolution: res }),
+          });
+          const { jobId } = await r.json();
+          return jobId;
+        })
+      );
+      setJobIds(ids);
     } catch { setGenerating(false); }
   };
 
@@ -419,29 +455,49 @@ export default function PostsPanel({ batches, onOpenBatches }) {
 
           {/* Resolution */}
           <div className="space-y-2">
-            <Label className="text-xs uppercase tracking-widest text-muted-foreground">Resolution</Label>
+            <div className="flex items-center justify-between">
+              <Label className="text-xs uppercase tracking-widest text-muted-foreground">Resolution</Label>
+              {selectedResolutions.length > 1 && (
+                <span className="text-xs text-muted-foreground">{selectedResolutions.length} resolutions — {selectedResolutions.length} jobs</span>
+              )}
+            </div>
             <div className="grid gap-1.5">
-              {RESOLUTION_OPTIONS.map(r => (
-                <button
-                  key={r.key}
-                  disabled={locked}
-                  onClick={() => !locked && setResolution(r.key)}
-                  className={cn(
-                    "flex items-center justify-between px-3 py-2 rounded-lg border text-left text-sm transition-all",
-                    resolution === r.key ? "border-primary bg-primary/10" : "border-border hover:border-border/80 text-muted-foreground",
-                    locked && "opacity-50 cursor-not-allowed"
-                  )}
-                >
-                  <div className="flex items-center gap-2">
-                    {resolution === r.key
-                      ? <Check className="w-3.5 h-3.5 text-primary" />
-                      : <div className="w-3.5 h-3.5 rounded-full border border-muted-foreground/40" />
-                    }
-                    <span className={cn("font-semibold mono text-xs", resolution === r.key && "text-primary")}>{r.label}</span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">{r.sub}</span>
-                </button>
-              ))}
+              {RESOLUTION_OPTIONS.map(r => {
+                const selected = selectedResolutions.includes(r.key);
+                return (
+                  <button
+                    key={r.key}
+                    disabled={locked}
+                    onClick={() => {
+                      if (!locked) {
+                        setSelectedResolutions(prev => {
+                          if (prev.includes(r.key)) {
+                            if (prev.length === 1) return prev;
+                            return prev.filter(x => x !== r.key);
+                          }
+                          return [...prev, r.key];
+                        });
+                      }
+                    }}
+                    className={cn(
+                      "flex items-center justify-between px-3 py-2 rounded-lg border text-left text-sm transition-all",
+                      selected ? "border-primary bg-primary/10" : "border-border hover:border-border/80 text-muted-foreground",
+                      locked && "opacity-50 cursor-not-allowed"
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className={cn(
+                        "w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 transition-all",
+                        selected ? "border-primary bg-primary" : "border-muted-foreground/40"
+                      )}>
+                        {selected && <Check className="w-2.5 h-2.5 text-primary-foreground" />}
+                      </div>
+                      <span className={cn("font-semibold mono text-xs", selected && "text-primary")}>{r.label}</span>
+                    </div>
+                    <span className="text-xs text-muted-foreground">{r.sub}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -459,6 +515,32 @@ export default function PostsPanel({ batches, onOpenBatches }) {
                 onChange={e => setTextMaxChars(Math.max(10, Math.min(80, Number(e.target.value) || 25)))}
               />
               <span className="text-xs text-muted-foreground">max characters per line before wrapping</span>
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Font */}
+          <div className="space-y-2">
+            <Label className="text-xs uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+              <Type className="w-3 h-3" /> Font
+            </Label>
+            <FontPicker
+              value={fontFamily}
+              onChange={(v) => { setFontFamily(v); if (activePreset) saveToPreset({ fontFamily: v }); }}
+              previewText={quotes}
+              disabled={locked}
+            />
+            <div className="flex items-center gap-2 mt-1">
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">Font size (px at 1080p)</Label>
+              <Input
+                type="number" min="12" max="300" step="1"
+                value={fontSize}
+                onChange={e => setFontSize(e.target.value)}
+                onBlur={e => { if (!e.target.value || isNaN(Number(e.target.value))) setFontSize('64'); }}
+                disabled={locked}
+                className="w-24"
+              />
             </div>
           </div>
         </CardContent>
@@ -489,6 +571,7 @@ export default function PostsPanel({ batches, onOpenBatches }) {
             <LayoutEditor
               preset={layoutPreset}
               onLayoutChange={handleLayoutChange}
+              onFontChange={(patch) => { if (patch.fontFamily) { setFontFamily(patch.fontFamily); if (activePreset) saveToPreset(patch); } }}
             />
           </CardContent>
         )}
@@ -500,14 +583,21 @@ export default function PostsPanel({ batches, onOpenBatches }) {
         onClick={generate}
         disabled={generating || selectedImages.length === 0 || !selectedBatch}
       >
-        {generating
-          ? <><RefreshCw className="w-4 h-4 animate-spin" /> Generating Posts...</>
-          : <><ImagePlus className="w-4 h-4" /> Generate {isFinite(willGenerate) && willGenerate > 0 ? willGenerate : ''} Post{willGenerate !== 1 ? 's' : ''}</>
-        }
+        {generating ? (
+          <><RefreshCw className="w-4 h-4 animate-spin" /> Generating Posts...</>
+        ) : selectedResolutions.length > 1 ? (
+          <><ImagePlus className="w-4 h-4" /> Generate Posts — {selectedResolutions.length} resolutions</>
+        ) : (
+          <><ImagePlus className="w-4 h-4" /> Generate {isFinite(willGenerate) && willGenerate > 0 ? willGenerate : ''} Post{willGenerate !== 1 ? 's' : ''}</>
+        )}
       </Button>
 
       {/* Job status */}
-      {job && <PostJobStatus job={job} />}
+      {jobs.length > 0 && (
+        <div className="space-y-3">
+          {jobs.map(j => <PostJobStatus key={j.id} job={j} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -530,6 +620,9 @@ function PostJobStatus({ job }) {
             {job.status === 'done'     && <Check className="w-3.5 h-3.5 text-green-400" />}
             {job.status === 'error'    && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
             <span className="text-sm font-semibold">Job {job.id?.slice(0, 8)}…</span>
+            {job.resolution && (
+              <Badge variant="secondary" className="text-xs mono">{job.resolution}</Badge>
+            )}
           </div>
           <span className={cn("text-xs px-2 py-0.5 rounded-full font-semibold", statusColors[job.status])}>
             {job.status?.toUpperCase()}

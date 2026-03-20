@@ -24,8 +24,10 @@ const OUTPUT_DIR = path.join(DATA_ROOT, 'outputs');
 const BATCHES_DIR = path.join(DATA_ROOT, 'batches');
 const ASSETS_DIR = path.join(DATA_ROOT, 'assets');
 const OVERLAYS_DIR = path.join(DATA_ROOT, 'overlays');
+const FONTS_DIR    = path.join(DATA_ROOT, 'fonts');
+const PRESET_LOGOS_DIR = path.join(DATA_ROOT, 'preset_logos');
 
-[DATA_ROOT, OUTPUT_DIR, BATCHES_DIR, ASSETS_DIR, OVERLAYS_DIR].forEach(d => fs.mkdirSync(d, { recursive: true }));
+[DATA_ROOT, OUTPUT_DIR, BATCHES_DIR, ASSETS_DIR, OVERLAYS_DIR, FONTS_DIR, PRESET_LOGOS_DIR].forEach(d => fs.mkdirSync(d, { recursive: true }));
 
 app.use('/outputs', express.static(OUTPUT_DIR));
 app.use('/assets', express.static(ASSETS_DIR));
@@ -41,6 +43,50 @@ const RESOLUTIONS = {
 
 app.get('/api/resolutions', (req, res) => {
   res.json(Object.entries(RESOLUTIONS).map(([key, val]) => ({ key, ...val })));
+});
+
+// ─── Fonts ────────────────────────────────────────────────────────────────────
+const AVAILABLE_FONTS = [
+  { id: 'default',          name: 'Default',          file: null,                    category: 'system'      },
+  { id: 'roboto',           name: 'Roboto',            file: 'Roboto.ttf',            category: 'sans-serif'  },
+  { id: 'open-sans',        name: 'Open Sans',         file: 'Open-Sans.ttf',         category: 'sans-serif'  },
+  { id: 'lato',             name: 'Lato',              file: 'Lato.ttf',              category: 'sans-serif'  },
+  { id: 'montserrat',       name: 'Montserrat',        file: 'Montserrat.ttf',        category: 'sans-serif'  },
+  { id: 'oswald',           name: 'Oswald',            file: 'Oswald.ttf',            category: 'sans-serif'  },
+  { id: 'raleway',          name: 'Raleway',           file: 'Raleway.ttf',           category: 'sans-serif'  },
+  { id: 'poppins',          name: 'Poppins',           file: 'Poppins.ttf',           category: 'sans-serif'  },
+  { id: 'nunito',           name: 'Nunito',            file: 'Nunito.ttf',            category: 'sans-serif'  },
+  { id: 'inter',            name: 'Inter',             file: 'Inter.ttf',             category: 'sans-serif'  },
+  { id: 'ubuntu',           name: 'Ubuntu',            file: 'Ubuntu.ttf',            category: 'sans-serif'  },
+  { id: 'playfair-display', name: 'Playfair Display',  file: 'Playfair-Display.ttf',  category: 'serif'       },
+  { id: 'merriweather',     name: 'Merriweather',      file: 'Merriweather.ttf',      category: 'serif'       },
+  { id: 'bebas-neue',       name: 'Bebas Neue',        file: 'Bebas-Neue.ttf',        category: 'display'     },
+  { id: 'anton',            name: 'Anton',             file: 'Anton.ttf',             category: 'display'     },
+  { id: 'pacifico',         name: 'Pacifico',          file: 'Pacifico.ttf',          category: 'script'      },
+  { id: 'dancing-script',   name: 'Dancing Script',    file: 'Dancing-Script.ttf',    category: 'script'      },
+  { id: 'lobster',          name: 'Lobster',           file: 'Lobster.ttf',           category: 'script'      },
+  { id: 'righteous',        name: 'Righteous',         file: 'Righteous.ttf',         category: 'display'     },
+  { id: 'orbitron',         name: 'Orbitron',          file: 'Orbitron.ttf',          category: 'display'     },
+  { id: 'russo-one',        name: 'Russo One',         file: 'Russo-One.ttf',         category: 'display'     },
+  { id: 'permanent-marker', name: 'Permanent Marker',  file: 'Permanent-Marker.ttf',  category: 'handwriting' },
+  { id: 'special-elite',    name: 'Special Elite',     file: 'Special-Elite.ttf',     category: 'monospace'   },
+];
+
+function getFontFile(fontId) {
+  if (!fontId || fontId === 'default') return null;
+  const font = AVAILABLE_FONTS.find(f => f.id === fontId);
+  if (!font?.file) return null;
+  const fp = path.join(FONTS_DIR, font.file);
+  return fs.existsSync(fp) ? fp : null;
+}
+
+app.get('/api/fonts', (req, res) => {
+  res.json(AVAILABLE_FONTS.map(f => ({
+    id:        f.id,
+    name:      f.name,
+    category:  f.category,
+    available: !f.file || fs.existsSync(path.join(FONTS_DIR, f.file)),
+  })));
 });
 
 // ─── MongoDB ──────────────────────────────────────────────────────────────────
@@ -171,12 +217,17 @@ const PresetSchema = new mongoose.Schema({
   imageDuration:  { type: Number, default: 0.2 },
   logoText:       { type: String, default: '' },
   logoSubtext:    { type: String, default: '' },
+  quotes:         { type: String, default: '' },
   textMaxChars:      { type: Number, default: 20 },
   preferredDuration: { type: Number, default: 20 },
   selectedVideos: { type: [String], default: [] },
   selectedImages: { type: [String], default: [] },
   locked:         { type: Boolean, default: false },
-  videoCount:     { type: Number, default: 1 }, // number of videos to generate
+  videoCount:     { type: Number, default: 1 },
+  fontFamily:     { type: String, default: 'default' },
+  logoFile:       { type: String, default: null },
+  presetType:     { type: String, enum: ['video', 'post'], default: 'video' },
+  resolutionEntries: { type: Array, default: [] }, // [{ key: '1920x1080', count: 2 }, ...]
   // Layout — all positions as 0–100 percentages of frame dimensions
   layout: {
     logo: {
@@ -203,7 +254,9 @@ const Preset = mongoose.model('Preset', PresetSchema);
 // ─── Preset Routes ────────────────────────────────────────────────────────────
 app.get('/api/presets', async (req, res) => {
   try {
-    const presets = await Preset.find().sort({ createdAt: -1 });
+    const filter = {};
+    if (req.query.type) filter.presetType = req.query.type;
+    const presets = await Preset.find(filter).sort({ createdAt: -1 });
     res.json(presets);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -225,9 +278,13 @@ app.post('/api/presets', async (req, res) => {
 
 app.put('/api/presets/:id', async (req, res) => {
   try {
+    // Use $set so dot-notation keys (e.g. 'layout.subtitles.fontSize') work correctly
+    const setDoc = {};
+    for (const [k, v] of Object.entries(req.body)) setDoc[k] = v;
+    setDoc.updatedAt = new Date();
     const preset = await Preset.findOneAndUpdate(
       { id: req.params.id },
-      { ...req.body, updatedAt: new Date() },
+      { $set: setDoc },
       { new: true }
     );
     if (!preset) return res.status(404).json({ error: 'not found' });
@@ -238,9 +295,11 @@ app.put('/api/presets/:id', async (req, res) => {
 app.delete('/api/presets/:id', async (req, res) => {
   try {
     await Preset.deleteOne({ id: req.params.id });
-    // Clean up overlay images for this preset
+    // Clean up overlay images and logo for this preset
     const presetOverlayDir = path.join(DATA_ROOT, 'preset_overlays', req.params.id);
     if (fs.existsSync(presetOverlayDir)) fs.rmSync(presetOverlayDir, { recursive: true, force: true });
+    const presetLogoDir = path.join(PRESET_LOGOS_DIR, req.params.id);
+    if (fs.existsSync(presetLogoDir)) fs.rmSync(presetLogoDir, { recursive: true, force: true });
     res.json({ deleted: req.params.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -301,6 +360,46 @@ app.delete('/api/presets/:id/overlays/:overlayId', async (req, res) => {
 // Serve preset overlay images
 app.use('/preset-overlays/:presetId', (req, res, next) => {
   const dir = path.join(DATA_ROOT, 'preset_overlays', req.params.presetId);
+  express.static(dir)(req, res, next);
+});
+
+// ── Per-preset logo ────────────────────────────────────────────────────────────
+const presetLogoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(PRESET_LOGOS_DIR, req.params.id);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, 'logo' + path.extname(file.originalname).toLowerCase());
+  }
+});
+const presetLogoUpload = multer({ storage: presetLogoStorage });
+
+app.post('/api/presets/:id/logo', presetLogoUpload.single('logo'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logoFile = req.file.filename;
+    await Preset.findOneAndUpdate({ id }, { $set: { logoFile, updatedAt: new Date() } });
+    res.json({ logoFile });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/presets/:id/logo', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const preset = await Preset.findOne({ id });
+    if (preset?.logoFile) {
+      const fp = path.join(PRESET_LOGOS_DIR, id, preset.logoFile);
+      if (fs.existsSync(fp)) fs.unlinkSync(fp);
+    }
+    await Preset.findOneAndUpdate({ id }, { $set: { logoFile: null, updatedAt: new Date() } });
+    res.json({ deleted: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.use('/preset-logos/:presetId', (req, res, next) => {
+  const dir = path.join(PRESET_LOGOS_DIR, req.params.presetId);
   express.static(dir)(req, res, next);
 });
 
@@ -561,23 +660,29 @@ app.get('/api/jobs/:id', async (req, res) => {
 app.post('/api/generate', async (req, res) => {
   const {
     batchName, videoFiles, imageFiles,
-    logoText, logoSubtext,
+    logoText, logoSubtext, quotes,
     textMaxChars,
     preferredDuration,
     sliceDuration, imageDuration,
     resolution,
     sessionToken,
-    presetId,       // optional — used to load layout
+    presetId,
     videoCount,
+    fontFamily,
+    fontSize,
   } = req.body;
 
   if (!batchName) return res.status(400).json({ error: 'batchName required' });
 
-  // Load layout from preset if provided
+  // Load layout + fontFamily + logoFile from preset if provided
   let layout = null;
+  let presetFontFamily = 'default';
+  let presetLogoFile = null;
   if (presetId) {
     const preset = await Preset.findOne({ id: presetId });
     if (preset?.layout) layout = preset.layout;
+    if (preset?.fontFamily) presetFontFamily = preset.fontFamily;
+    if (preset?.logoFile) presetLogoFile = preset.logoFile;
   }
 
   const jobId = uuidv4();
@@ -595,8 +700,11 @@ app.post('/api/generate', async (req, res) => {
     presetName: presetName || null,
     generationParams: {
       batchName, videoFiles, imageFiles, logoText, logoSubtext,
+      quotes: quotes || '',
       textMaxChars, preferredDuration, sliceDuration, imageDuration,
       resolution, presetId, videoCount,
+      fontFamily: fontFamily || 'default',
+      fontSize: fontSize || null,
     },
   });
 
@@ -608,6 +716,7 @@ app.post('/api/generate', async (req, res) => {
     imageFiles: imageFiles || [],
     logoText: logoText || '',
     logoSubtext: logoSubtext || '',
+    quotes: quotes || '',
     textMaxChars: Number(textMaxChars) || 0,
     preferredDuration: Number(preferredDuration) || 0,
     sliceDuration: Number(sliceDuration) || 3,
@@ -617,6 +726,9 @@ app.post('/api/generate', async (req, res) => {
     layout,
     presetId: presetId || null,
     videoCount: Number(videoCount) || 1,
+    fontFamily: fontFamily || presetFontFamily || 'default',
+    fontSize:   fontSize ? Number(fontSize) : null,
+    presetLogoFile,
   }).catch(e => console.error('Generation error:', e));
 });
 
@@ -624,15 +736,20 @@ app.post('/api/generate-posts', async (req, res) => {
   const {
     batchName, imageFiles, quotes, postCount,
     resolution, textMaxChars, layout, presetId,
+    fontFamily, fontSize,
   } = req.body;
 
   if (!batchName) return res.status(400).json({ error: 'batchName required' });
 
-  // Load layout from preset if not explicitly provided
+  // Load layout + fontFamily + logoFile from preset if not explicitly provided
   let effectiveLayout = layout || null;
-  if (presetId && !effectiveLayout) {
+  let postPresetFontFamily = 'default';
+  let postPresetLogoFile = null;
+  if (presetId) {
     const preset = await Preset.findOne({ id: presetId });
-    if (preset?.layout) effectiveLayout = preset.layout;
+    if (!effectiveLayout && preset?.layout) effectiveLayout = preset.layout;
+    if (preset?.fontFamily) postPresetFontFamily = preset.fontFamily;
+    if (preset?.logoFile) postPresetLogoFile = preset.logoFile;
   }
 
   let postPresetName = null;
@@ -648,7 +765,13 @@ app.post('/api/generate-posts', async (req, res) => {
     type: 'post',
     presetId: presetId || null,
     presetName: postPresetName || null,
-    generationParams: { batchName, imageFiles, quotes, postCount, resolution, textMaxChars, presetId },
+    generationParams: {
+      batchName, imageFiles, quotes: quotes || '',
+      postCount, resolution, textMaxChars, presetId,
+      fontFamily: fontFamily || 'default',
+      fontSize: fontSize || null,
+      layout: layout || null,
+    },
   });
 
   res.json({ jobId });
@@ -662,12 +785,16 @@ app.post('/api/generate-posts', async (req, res) => {
     textMaxChars: Number(textMaxChars) || 25,
     layout:      effectiveLayout,
     presetId:    presetId || null,
+    fontFamily:  fontFamily || postPresetFontFamily || 'default',
+    fontSize:    fontSize ? Number(fontSize) : null,
+    presetLogoFile: postPresetLogoFile,
   }).catch(e => console.error('Post generation error:', e));
 });
 
 // ─── Video Generation ─────────────────────────────────────────────────────────
 async function runGeneration(job, opts) {
-  const { batchName, videoFiles, imageFiles, logoText, logoSubtext, textMaxChars, preferredDuration, sliceDuration, imageDuration, resolution, sessionToken, layout, presetId, videoCount = 1 } = opts;
+  const { batchName, videoFiles, imageFiles, logoText, logoSubtext, quotes, textMaxChars, preferredDuration, sliceDuration, imageDuration, resolution, sessionToken, layout, presetId, videoCount = 1, fontFamily = 'default', fontSize = null, presetLogoFile = null } = opts;
+  const quoteLines = (quotes || '').split('\n').map(q => q.trim()).filter(Boolean);
   const batchDir = path.join(BATCHES_DIR, batchName);
 
   const addLog = async (msg) => {
@@ -693,6 +820,12 @@ async function runGeneration(job, opts) {
       dimBackground: layout?.dimBackground ?? 0,
     };
 
+    // Apply explicit fontSize override if provided
+    if (fontSize) L.subtitles.fontSize = fontSize;
+
+    // Resolve font file for FFmpeg drawtext
+    const fontFile = getFontFile(fontFamily);
+
     // Scale factors relative to 1920x1080 baseline
     const sf = W / 1920;
     const fontMain  = Math.round(L.subtitles.fontSize * sf);
@@ -711,8 +844,18 @@ async function runGeneration(job, opts) {
     const textYSub  = `${subYPx + Math.round(fontMain * 1.3)}`;
 
     // ── Assets ────────────────────────────────────────────────────────────────
-    const logoFiles = fs.existsSync(ASSETS_DIR) ? fs.readdirSync(ASSETS_DIR).filter(f => /^logo\./i.test(f)) : [];
-    const logoPath = (logoFiles.length > 0 && L.logo.enabled) ? path.join(ASSETS_DIR, logoFiles[0]) : null;
+    // Prefer per-preset logo if available, fall back to global logo
+    let logoPath = null;
+    if (L.logo.enabled) {
+      if (presetLogoFile && presetId) {
+        const presetLp = path.join(PRESET_LOGOS_DIR, presetId, presetLogoFile);
+        if (fs.existsSync(presetLp)) logoPath = presetLp;
+      }
+      if (!logoPath) {
+        const globalLogoFiles = fs.existsSync(ASSETS_DIR) ? fs.readdirSync(ASSETS_DIR).filter(f => /^logo\./i.test(f)) : [];
+        if (globalLogoFiles.length > 0) logoPath = path.join(ASSETS_DIR, globalLogoFiles[0]);
+      }
+    }
 
     let srtPath = null;
     let audioPath = null;
@@ -742,21 +885,24 @@ async function runGeneration(job, opts) {
       if (staticOverlays.length) await addLog(`Static overlays: ${staticOverlays.length}`);
     }
 
-    const safeText = (logoText || '').replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
-    const safeSub  = (logoSubtext || '').replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+    const esc = (s) => (s || '').replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+    const safeText = esc(logoText);
+    const safeSub  = esc(logoSubtext);
 
     // ── Convert SRT → ASS with layout-driven position (shared across all videos) ─
     let assPath = null;
     if (srtPath) {
       assPath = srtPath.replace(/\.srt$/i, '.ass');
       const srtContent = fs.readFileSync(srtPath, 'utf8');
-      const assContent = srtToAss(srtContent, fontMain, W, H, subXPx, subYPx);
+      const fontNameForAss = fontFamily !== 'default' ? (AVAILABLE_FONTS.find(f => f.id === fontFamily)?.name || 'Arial') : 'Arial';
+      const assContent = srtToAss(srtContent, fontMain, W, H, subXPx, subYPx, fontNameForAss);
       fs.writeFileSync(assPath, assContent, 'utf8');
       await addLog(`Converted SRT to ASS (position: ${L.subtitles.x}%, ${L.subtitles.y}%)`);
     }
 
     // ── Filter builder ────────────────────────────────────────────────────────
-    const buildOverlayFilters = (inputLabel, logoIdx, extraInputStart) => {
+    const fontFileParam = fontFile ? `fontfile='${fontFile}':` : '';
+    const buildOverlayFilters = (inputLabel, logoIdx, extraInputStart, quoteText = '') => {
       const filters = [];
       let cur = inputLabel;
       let nextIdx = extraInputStart;
@@ -786,10 +932,11 @@ async function runGeneration(job, opts) {
       }
 
       // Subtitles (ASS burned in final pass, plain text here)
-      if (!assPath && safeText) {
+      const activeText = quoteText || logoText || '';
+      if (!assPath && activeText) {
         const escLine = (l) => l.replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
-        const mainLines = wrapText(logoText || '', textMaxChars).map(escLine);
-        const subLines  = (logoSubtext && safeSub) ? wrapText(logoSubtext || '', textMaxChars).map(escLine) : [];
+        const mainLines = wrapText(activeText, textMaxChars).map(escLine);
+        const subLines  = (!quoteText && logoSubtext && safeSub) ? wrapText(logoSubtext || '', textMaxChars).map(escLine) : [];
 
         const lineH      = Math.round(fontMain * 1.3);
         const subLineH   = Math.round(fontSub  * 1.3);
@@ -800,14 +947,14 @@ async function runGeneration(job, opts) {
         mainLines.forEach((line, idx) => {
           const yPx = Math.max(0, subYPx - Math.round(blockH / 2) + idx * lineH);
           const outLabel = 'dt' + (dtIdx++);
-          filters.push('[' + cur + ']drawtext=fontsize=' + fontMain + ':fontcolor=white:x=' + textXExpr + ':y=' + yPx + ":text='" + line + "':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5[" + outLabel + ']');
+          filters.push('[' + cur + ']drawtext=' + fontFileParam + 'fontsize=' + fontMain + ':fontcolor=white:x=' + textXExpr + ':y=' + yPx + ":text='" + line + "':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5[" + outLabel + ']');
           cur = outLabel;
         });
 
         subLines.forEach((line, idx) => {
           const yPx = Math.max(0, subYPx - Math.round(blockH / 2) + totalMainH + Math.round(fontMain * 0.5) + idx * subLineH);
           const outLabel = 'dt' + (dtIdx++);
-          filters.push('[' + cur + ']drawtext=fontsize=' + fontSub + ':fontcolor=white@0.9:x=' + textXExpr + ':y=' + yPx + ":text='" + line + "':shadowcolor=black@0.8:shadowx=2:shadowy=2[" + outLabel + ']');
+          filters.push('[' + cur + ']drawtext=' + fontFileParam + 'fontsize=' + fontSub + ':fontcolor=white@0.9:x=' + textXExpr + ':y=' + yPx + ":text='" + line + "':shadowcolor=black@0.8:shadowx=2:shadowy=2[" + outLabel + ']');
           cur = outLabel;
         });
       }
@@ -840,6 +987,13 @@ async function runGeneration(job, opts) {
       fs.mkdirSync(localTmpDir, { recursive: true });
 
       if (effectiveCount > 1) await addLog(`--- Video ${vidIdx + 1} / ${effectiveCount} ---`);
+
+      // Pick a random quote for this video (no repeats until pool exhausted)
+      const videoQuote = quoteLines.length > 0
+        ? quoteLines[Math.floor(Math.random() * quoteLines.length)]
+        : '';
+      if (videoQuote) await addLog(`Quote: "${videoQuote.slice(0, 60)}${videoQuote.length > 60 ? '…' : ''}"`);
+
 
       // Scale progress for this video within overall job progress (5–95%)
       const pBase  = 5 + (vidIdx / effectiveCount) * 90;
@@ -894,7 +1048,7 @@ async function runGeneration(job, opts) {
               const extraInputStart = (logoPath ? 2 : 1);
 
               const scalePart = `[0:v]fps=30,trim=start=${startTime.toFixed(3)}:duration=${thisSliceDur.toFixed(3)},setpts=PTS-STARTPTS,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1[scaled]`;
-              const { filters, finalLabel } = buildOverlayFilters('scaled', logoIdx, extraInputStart);
+              const { filters, finalLabel } = buildOverlayFilters('scaled', logoIdx, extraInputStart, videoQuote);
               const filterComplex = [scalePart, ...filters].join(';');
 
               let sliceOk = false;
@@ -962,7 +1116,7 @@ async function runGeneration(job, opts) {
             let filled = 0;
             let pass = 0;
             while (filled < imgTargetDur && pass < 200) {
-              const shuffled = pass === 0 ? [...selectedImages] : shuffle([...selectedImages]);
+              const shuffled = shuffle([...selectedImages]);
               for (const img of shuffled) {
                 const remaining = imgTargetDur - filled;
                 const thisDur = Math.min(imageDuration, remaining);
@@ -974,7 +1128,7 @@ async function runGeneration(job, opts) {
               pass++;
             }
           } else {
-            selectedImages.forEach(img => imageSequence.push({ img, dur: imageDuration }));
+            shuffle([...selectedImages]).forEach(img => imageSequence.push({ img, dur: imageDuration }));
           }
 
           await addLog(`  Image sequence: ${imageSequence.length} frames totalling ${imageSequence.reduce((s,x) => s+x.dur, 0).toFixed(1)}s`);
@@ -996,7 +1150,7 @@ async function runGeneration(job, opts) {
           const concatInputs = imageSequence.map((_, i) => `[v${i}]`).join('');
           filterParts.push(`${concatInputs}concat=n=${imageSequence.length}:v=1:a=0[slide]`);
 
-          const { filters, finalLabel } = buildOverlayFilters('slide', logoIdx, extraInputStart);
+          const { filters, finalLabel } = buildOverlayFilters('slide', logoIdx, extraInputStart, videoQuote);
           filterParts = [...filterParts, ...filters];
 
           const slideshowOut = path.join(localTmpDir, 'slideshow.mp4');
@@ -1130,7 +1284,7 @@ async function runGeneration(job, opts) {
 
 // ─── Post Generation ──────────────────────────────────────────────────────────
 async function runPostGeneration(job, opts) {
-  const { batchName, imageFiles, quotes, postCount, resolution, textMaxChars, layout, presetId } = opts;
+  const { batchName, imageFiles, quotes, postCount, resolution, textMaxChars, layout, presetId, fontFamily = 'default', fontSize = null, presetLogoFile = null } = opts;
 
   const addLog = async (msg) => {
     console.log(`[${job.id}] ${msg}`);
@@ -1155,6 +1309,13 @@ async function runPostGeneration(job, opts) {
       dimBackground: layout?.dimBackground ?? 0,
     };
 
+    // Apply explicit fontSize override if provided
+    if (fontSize) L.subtitles.fontSize = fontSize;
+
+    // Resolve font file for FFmpeg drawtext
+    const postFontFile = getFontFile(fontFamily);
+    const postFontFileParam = postFontFile ? `fontfile='${postFontFile}':` : '';
+
     const sf       = W / 1920;
     const fontMain = Math.round(L.subtitles.fontSize * sf);
     const logoW    = Math.round((L.logo.w / 100) * W);
@@ -1167,8 +1328,18 @@ async function runPostGeneration(job, opts) {
     const textXExpr = L.subtitles.x === 50 ? '(w-text_w)/2' : `${subXPx}-text_w/2`;
 
     // ── Assets ────────────────────────────────────────────────────────────────
-    const logoFiles = fs.existsSync(ASSETS_DIR) ? fs.readdirSync(ASSETS_DIR).filter(f => /^logo\./i.test(f)) : [];
-    const logoPath  = (logoFiles.length > 0 && L.logo.enabled) ? path.join(ASSETS_DIR, logoFiles[0]) : null;
+    // Prefer per-preset logo if available, fall back to global logo
+    let logoPath = null;
+    if (L.logo.enabled) {
+      if (presetLogoFile && presetId) {
+        const presetLp = path.join(PRESET_LOGOS_DIR, presetId, presetLogoFile);
+        if (fs.existsSync(presetLp)) logoPath = presetLp;
+      }
+      if (!logoPath) {
+        const globalLogoFiles = fs.existsSync(ASSETS_DIR) ? fs.readdirSync(ASSETS_DIR).filter(f => /^logo\./i.test(f)) : [];
+        if (globalLogoFiles.length > 0) logoPath = path.join(ASSETS_DIR, globalLogoFiles[0]);
+      }
+    }
 
     // Static overlays from preset
     const staticOverlays = [];
@@ -1273,7 +1444,7 @@ async function runPostGeneration(job, opts) {
           const yPx      = Math.max(0, subYPx - Math.round(blockH / 2) + idx * lineH);
           const outLabel = `dtp${i}_${idx}`;
           filterParts.push(
-            `[${cur}]drawtext=fontsize=${fontMain}:fontcolor=white:x=${textXExpr}:y=${yPx}` +
+            `[${cur}]drawtext=${postFontFileParam}fontsize=${fontMain}:fontcolor=white:x=${textXExpr}:y=${yPx}` +
             `:text='${line}':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5[${outLabel}]`
           );
           cur = outLabel;
@@ -1373,7 +1544,7 @@ function getSrtDuration(srtContent) {
 
 // Convert SRT content to ASS with position-aware styling
 // subXPct: 0-100% from left, subYPct: 0-100% from top
-function srtToAss(srtContent, fontSize, W, H, subXPx, subYPx) {
+function srtToAss(srtContent, fontSize, W, H, subXPx, subYPx, fontName = 'Arial') {
   // Determine ASS alignment and margins from position
   // ASS numpad alignment: 1=BL 2=BC 3=BR 4=ML 5=MC 6=MR 7=TL 8=TC 9=TR
   const xPct = subXPx != null ? (subXPx / W) * 100 : 50;
@@ -1401,7 +1572,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,Arial,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,${alignment},${marginL},${marginR},${marginV},1
+Style: Karaoke,${fontName},${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,${alignment},${marginL},${marginR},${marginV},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

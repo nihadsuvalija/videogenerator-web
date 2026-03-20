@@ -141,6 +141,12 @@ body::before {
 }
 .fade-in { animation: fadeIn 0.2s ease-out forwards; }
 
+/* Loading card shimmer */
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
 /* User dropdown */
 @keyframes dropdownIn {
   from { opacity: 0; transform: translateY(-6px) scale(0.96); }

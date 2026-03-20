@@ -3,6 +3,7 @@ import {
   Move, Image, Type, Upload, Trash2, RefreshCw, Check,
   Eye, EyeOff, Lock, Unlock, Plus, X, ChevronDown
 } from 'lucide-react';
+import FontPicker from './FontPicker';
 import { Button } from './ui-button';
 import { Label, Badge, Separator } from './ui-primitives';
 import { cn } from '../lib/utils';
@@ -30,14 +31,15 @@ function getCanvasH(resolution) {
 // x, y: 0-100% of canvas (center point)
 // w: 0-100% of canvas width
 
-export default function LayoutEditor({ preset, onLayoutChange }) {
+export default function LayoutEditor({ preset, onLayoutChange, onFontChange }) {
   const resolution = preset?.resolution || '1920x1080';
   const layout     = preset?.layout || {};
   const canvasH    = getCanvasH(resolution);
 
   // Local element state derived from preset layout
-  const [elements, setElements] = useState(() => buildElements(layout, preset));
-  const [selected, setSelected]  = useState(null);  // element id
+  const [elements, setElements]       = useState(() => buildElements(layout, preset));
+  const [fontFamily, setFontFamily]   = useState(preset?.fontFamily || 'default');
+  const [selected, setSelected]       = useState(null);  // element id
   const [dragging, setDragging]  = useState(null);  // { id, startMouseX, startMouseY, startX, startY }
   const [resizing, setResizing]  = useState(null);  // { id, startMouseX, startW }
   const [uploadingOverlay, setUploadingOverlay] = useState(false);
@@ -53,6 +55,7 @@ export default function LayoutEditor({ preset, onLayoutChange }) {
     const dim = layout?.dimBackground ?? 0;
     setDimBackground(dim);
     dimRef.current = dim;
+    setFontFamily(preset?.fontFamily || 'default');
   }, [preset?.id]);
 
   // Debounced save back to parent
@@ -62,6 +65,11 @@ export default function LayoutEditor({ preset, onLayoutChange }) {
       onLayoutChange(elementsToLayout(newElements, preset, dimRef.current));
     }, 400);
   }, [onLayoutChange, preset]);
+
+  const handleFontFamilyChange = useCallback((v) => {
+    setFontFamily(v);
+    onFontChange?.({ fontFamily: v });
+  }, [onFontChange]);
 
   const handleDimChange = useCallback((v) => {
     dimRef.current = v;
@@ -285,10 +293,20 @@ export default function LayoutEditor({ preset, onLayoutChange }) {
                 <NumInput label="Width %" value={selectedEl.w}
                   onChange={v => updateElement(selectedEl.id, { w: v })} min={5} max={80} />
                 {selectedEl.type === 'subtitle' && (
-                  <NumInput label="Font size" value={selectedEl.fontSize || 52}
-                    onChange={v => updateElement(selectedEl.id, { fontSize: v })} min={16} max={120} />
+                  <NumInput label="Font size (px)" value={selectedEl.fontSize || 52}
+                    onChange={v => updateElement(selectedEl.id, { fontSize: v })} min={12} max={300} />
                 )}
               </div>
+              {selectedEl.type === 'subtitle' && (
+                <div className="space-y-1.5">
+                  <p className="text-xs text-muted-foreground">Font family</p>
+                  <FontPicker
+                    value={fontFamily}
+                    onChange={handleFontFamilyChange}
+                    previewText="The quick brown fox jumps"
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>

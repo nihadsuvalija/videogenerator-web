@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Sliders, Plus, Trash2, Lock, Unlock, ChevronDown, ChevronRight,
-  Zap, Check, RefreshCw, Copy, LayoutTemplate
+  Sliders, Plus, Trash2, Lock, Unlock, ChevronRight,
+  Zap, Check, RefreshCw, Copy, LayoutTemplate, Upload, Image,
+  Film, ImagePlus
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -13,21 +14,14 @@ import { cn } from '../lib/utils';
 
 const API = 'http://localhost:5001';
 
-const RESOLUTION_OPTIONS = [
-  { key: '1920x1080', label: '1920×1080', sub: '16:9 Landscape' },
-  { key: '1080x1080', label: '1080×1080', sub: '1:1 Square' },
-  { key: '1080x1920', label: '1080×1920', sub: '9:16 Portrait' },
-  { key: '3840x2160', label: '3840×2160', sub: '4K Landscape' },
-  { key: '2160x3840', label: '2160×3840', sub: '4K Portrait' },
-];
-
 export default function PresetsPanel({ onApplyPreset, onPresetsChanged }) {
-  const [presets, setPresets]       = useState([]);
-  const [loading, setLoading]       = useState(true);
-  const [expandedId, setExpandedId] = useState(null);
-  const [creating, setCreating]     = useState(false);
-  const [savingId, setSavingId]     = useState(null);
-  const [savedId, setSavedId]       = useState(null);
+  const [presets, setPresets]         = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [activeType, setActiveType]   = useState('video'); // 'video' | 'post'
+  const [expandedId, setExpandedId]   = useState(null);
+  const [creating, setCreating]       = useState(false);
+  const [savingId, setSavingId]       = useState(null);
+  const [savedId, setSavedId]         = useState(null);
 
   const loadPresets = useCallback(async () => {
     try {
@@ -41,10 +35,11 @@ export default function PresetsPanel({ onApplyPreset, onPresetsChanged }) {
   const createPreset = async () => {
     setCreating(true);
     try {
+      const visible = presets.filter(p => p.presetType === activeType);
       const res = await fetch(`${API}/api/presets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `Preset ${presets.length + 1}` })
+        body: JSON.stringify({ name: `${activeType === 'video' ? 'Video' : 'Post'} Preset ${visible.length + 1}`, presetType: activeType })
       });
       const preset = await res.json();
       setPresets(p => [preset, ...p]);
@@ -86,6 +81,19 @@ export default function PresetsPanel({ onApplyPreset, onPresetsChanged }) {
     onPresetsChanged?.();
   };
 
+  const uploadPresetLogo = async (id, file) => {
+    const fd = new FormData();
+    fd.append('logo', file);
+    const res = await fetch(`${API}/api/presets/${id}/logo`, { method: 'POST', body: fd });
+    const { logoFile } = await res.json();
+    setPresets(p => p.map(pr => pr.id === id ? { ...pr, logoFile } : pr));
+  };
+
+  const deletePresetLogo = async (id) => {
+    await fetch(`${API}/api/presets/${id}/logo`, { method: 'DELETE' });
+    setPresets(p => p.map(pr => pr.id === id ? { ...pr, logoFile: null } : pr));
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -94,27 +102,61 @@ export default function PresetsPanel({ onApplyPreset, onPresetsChanged }) {
     );
   }
 
+  const visiblePresets = presets.filter(p => (p.presetType || 'video') === activeType);
+
   return (
     <div className="space-y-4">
+      {/* Type switcher */}
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {presets.length === 0 ? 'No presets yet.' : `${presets.length} preset${presets.length !== 1 ? 's' : ''}`}
-        </p>
-        <Button onClick={createPreset} disabled={creating} size="sm">
-          {creating ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-          New Preset
-        </Button>
+        <div className="flex items-center gap-1 bg-secondary rounded-lg p-1">
+          <button
+            onClick={() => { setActiveType('video'); setExpandedId(null); }}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all",
+              activeType === 'video' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <Film className="w-3.5 h-3.5" /> Video
+          </button>
+          <button
+            onClick={() => { setActiveType('post'); setExpandedId(null); }}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all",
+              activeType === 'post' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <ImagePlus className="w-3.5 h-3.5" /> Post
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <p className="text-sm text-muted-foreground">
+            {visiblePresets.length === 0 ? 'No presets yet.' : `${visiblePresets.length} preset${visiblePresets.length !== 1 ? 's' : ''}`}
+          </p>
+          <Button onClick={createPreset} disabled={creating} size="sm">
+            {creating ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+            New
+          </Button>
+        </div>
       </div>
 
-      {presets.length === 0 && (
+      {visiblePresets.length === 0 && (
         <div className="rounded-xl border border-dashed border-border p-12 text-center">
-          <Sliders className="w-10 h-10 mx-auto mb-3 opacity-20" />
-          <p className="text-sm text-muted-foreground">Create a preset to save your generation settings</p>
-          <p className="text-xs text-muted-foreground/60 mt-1">Resolution, slice durations, text overlays, layout positions</p>
+          {activeType === 'video'
+            ? <Film className="w-10 h-10 mx-auto mb-3 opacity-20" />
+            : <ImagePlus className="w-10 h-10 mx-auto mb-3 opacity-20" />
+          }
+          <p className="text-sm text-muted-foreground">
+            No {activeType} presets yet.
+          </p>
+          <p className="text-xs text-muted-foreground/60 mt-1">
+            {activeType === 'video'
+              ? 'Save resolution, timing, font, and layout for video generation.'
+              : 'Save resolution, font, and layout for post/image generation.'}
+          </p>
         </div>
       )}
 
-      {presets.map(preset => (
+      {visiblePresets.map(preset => (
         <PresetCard
           key={preset.id}
           preset={preset}
@@ -126,6 +168,8 @@ export default function PresetsPanel({ onApplyPreset, onPresetsChanged }) {
           onApply={() => onApplyPreset(preset)}
           saving={savingId === preset.id}
           saved={savedId === preset.id}
+          onLogoUpload={(file) => uploadPresetLogo(preset.id, file)}
+          onLogoDelete={() => deletePresetLogo(preset.id)}
         />
       ))}
     </div>
@@ -138,7 +182,7 @@ const PRESET_TABS = [
   { id: 'layout',   label: 'Layout Editor', icon: LayoutTemplate },
 ];
 
-function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicate, onApply, saving, saved }) {
+function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicate, onApply, saving, saved, onLogoUpload, onLogoDelete }) {
   const debounceRef = useRef({});
   const [activeTab, setActiveTab] = useState('settings');
 
@@ -180,6 +224,16 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
           />
           <div className="flex items-center gap-1.5 flex-shrink-0">
             <Badge variant="secondary" className="text-xs mono">{preset.resolution}</Badge>
+            {(preset.presetType === 'post') && (
+              <Badge className="text-xs bg-blue-500/20 text-blue-400 border-blue-500/30">
+                <ImagePlus className="w-2.5 h-2.5 mr-1" /> Post
+              </Badge>
+            )}
+            {(!preset.presetType || preset.presetType === 'video') && (
+              <Badge className="text-xs bg-purple-500/20 text-purple-400 border-purple-500/30">
+                <Film className="w-2.5 h-2.5 mr-1" /> Video
+              </Badge>
+            )}
             {preset.locked && (
               <Badge className="text-xs bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
                 <Lock className="w-2.5 h-2.5 mr-1" /> Locked
@@ -254,52 +308,24 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
 
                 {/* Resolution */}
                 <Section title="Resolution">
-                  <div className="grid grid-cols-1 gap-1.5">
-                    {RESOLUTION_OPTIONS.map(r => (
-                      <button key={r.key} disabled={preset.locked}
-                        onClick={() => !preset.locked && immediateUpdate('resolution', r.key)}
-                        className={cn(
-                          "flex items-center justify-between px-3 py-2 rounded-lg border text-left text-sm transition-all",
-                          preset.resolution === r.key ? "border-primary bg-primary/10" : "border-border hover:border-border/80 text-muted-foreground",
-                          preset.locked && "opacity-50 cursor-not-allowed"
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          {preset.resolution === r.key
-                            ? <Check className="w-3.5 h-3.5 text-primary" />
-                            : <div className="w-3.5 h-3.5 rounded-full border border-muted-foreground/40" />}
-                          <span className={cn("font-semibold mono text-xs", preset.resolution === r.key && "text-primary")}>{r.label}</span>
-                        </div>
-                        <span className="text-xs text-muted-foreground">{r.sub}</span>
-                      </button>
-                    ))}
-                  </div>
+                  <PresetResolutionPicker
+                    preset={preset}
+                    onUpdate={onUpdate}
+                    locked={preset.locked}
+                    isPost={preset.presetType === 'post'}
+                  />
                 </Section>
 
                 <Separator />
 
-                {/* Text overlays */}
-                <Section title="Text Overlay">
-                  <div className="space-y-2">
-                    <Input placeholder="Title text (e.g. My Brand)" defaultValue={preset.logoText}
-                      disabled={preset.locked} onChange={e => debouncedUpdate('logoText', e.target.value)} />
-                    <Input placeholder="Subtitle text (e.g. @handle)" defaultValue={preset.logoSubtext}
-                      disabled={preset.locked} onChange={e => debouncedUpdate('logoSubtext', e.target.value)} />
-                    <div className="flex items-center gap-2 pt-1">
-                      <Label className="text-xs text-muted-foreground whitespace-nowrap">Max chars / line</Label>
-                      <Input
-                        type="number" min="0" max="200" step="1"
-                        defaultValue={preset.textMaxChars ?? 0}
-                        disabled={preset.locked}
-                        onChange={e => debouncedUpdate('textMaxChars', Number(e.target.value))}
-                        className="w-24"
-                        placeholder="0 = off"
-                      />
-                      {(preset.textMaxChars > 0) && (
-                        <span className="text-xs text-muted-foreground">wraps at {preset.textMaxChars} chars</span>
-                      )}
-                    </div>
-                  </div>
+                {/* Logo */}
+                <Section title="Logo Image">
+                  <PresetLogoUpload
+                    preset={preset}
+                    onUpload={onLogoUpload}
+                    onDelete={onLogoDelete}
+                    locked={preset.locked}
+                  />
                 </Section>
 
                 <Separator />
@@ -320,22 +346,6 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
                   </div>
                 </Section>
 
-                <Separator />
-
-                {/* Number of videos */}
-                <Section title="Number of Videos to Generate" description="If more than 1, all outputs are saved into a timestamped folder.">
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="number" min="1" max="20" step="1"
-                      defaultValue={preset.videoCount ?? 1}
-                      disabled={preset.locked}
-                      className="w-24"
-                      onChange={e => debouncedUpdate('videoCount', Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
-                    />
-                    <span className="text-xs text-muted-foreground">video{(preset.videoCount ?? 1) !== 1 ? 's' : ''} per generation run</span>
-                  </div>
-                </Section>
-
                 {preset.locked && (
                   <div className="rounded-lg bg-yellow-500/10 border border-yellow-500/20 px-3 py-2 flex items-center gap-2">
                     <Lock className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />
@@ -353,9 +363,11 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
                 <LayoutEditor
                   preset={preset}
                   onLayoutChange={handleLayoutChange}
+                  onFontChange={(patch) => onUpdate(patch)}
                 />
               </div>
             )}
+
           </CardContent>
         </div>
       )}
@@ -380,6 +392,140 @@ function Field({ label, children }) {
     <div className="space-y-1.5">
       <Label className="text-xs text-muted-foreground">{label}</Label>
       {children}
+    </div>
+  );
+}
+
+const ALL_RESOLUTIONS = [
+  { key: '1920x1080', label: '1920×1080', sub: '16:9 Landscape' },
+  { key: '1080x1080', label: '1080×1080', sub: '1:1 Square' },
+  { key: '1080x1920', label: '1080×1920', sub: '9:16 Portrait' },
+  { key: '3840x2160', label: '3840×2160', sub: '4K Landscape' },
+  { key: '2160x3840', label: '2160×3840', sub: '4K Portrait' },
+];
+
+function PresetResolutionPicker({ preset, onUpdate, locked, isPost }) {
+  // Derive current selections from resolutionEntries or fall back to single resolution
+  const entries = preset.resolutionEntries?.length
+    ? preset.resolutionEntries
+    : [{ key: preset.resolution || '1920x1080', count: preset.videoCount || 1 }];
+
+  const selectedKeys = entries.map(e => e.key);
+  const getCount = (key) => (entries.find(e => e.key === key)?.count) ?? 1;
+
+  const save = (newEntries) => {
+    const totalCount = newEntries.reduce((s, e) => s + (e.count || 1), 0);
+    onUpdate({
+      resolutionEntries: newEntries,
+      resolution: newEntries[0]?.key || '1920x1080',
+      ...(isPost ? {} : { videoCount: totalCount }),
+    });
+  };
+
+  const toggle = (key) => {
+    if (locked) return;
+    if (selectedKeys.includes(key)) {
+      if (selectedKeys.length === 1) return;
+      save(entries.filter(e => e.key !== key));
+    } else {
+      save([...entries, { key, count: 1 }]);
+    }
+  };
+
+  const adjustCount = (key, delta) => {
+    if (locked) return;
+    save(entries.map(e => e.key === key ? { ...e, count: Math.max(1, Math.min(20, e.count + delta)) } : e));
+  };
+
+  return (
+    <div className="grid grid-cols-1 gap-1.5">
+      {ALL_RESOLUTIONS.map(r => {
+        const selected = selectedKeys.includes(r.key);
+        const count = getCount(r.key);
+        return (
+          <button key={r.key} disabled={locked}
+            onClick={() => toggle(r.key)}
+            className={cn(
+              "flex items-center justify-between px-3 py-2 rounded-lg border text-left text-sm transition-all",
+              selected ? "border-primary bg-primary/10" : "border-border hover:border-border/80 text-muted-foreground",
+              locked && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            <div className="flex items-center gap-2">
+              <div className={cn(
+                "w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 transition-all",
+                selected ? "border-primary bg-primary" : "border-muted-foreground/40"
+              )}>
+                {selected && <Check className="w-2.5 h-2.5 text-primary-foreground" />}
+              </div>
+              <span className={cn("font-semibold mono text-xs", selected && "text-primary")}>{r.label}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">{r.sub}</span>
+              {selected && !isPost && (
+                <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                  <button
+                    onClick={() => adjustCount(r.key, -1)}
+                    disabled={locked || count <= 1}
+                    className="w-5 h-5 rounded border border-border hover:border-primary/60 text-xs font-bold flex items-center justify-center transition-all disabled:opacity-30"
+                  >−</button>
+                  <span className="w-5 text-center text-xs font-mono font-semibold text-primary">{count}</span>
+                  <button
+                    onClick={() => adjustCount(r.key, 1)}
+                    disabled={locked || count >= 20}
+                    className="w-5 h-5 rounded border border-border hover:border-primary/60 text-xs font-bold flex items-center justify-center transition-all disabled:opacity-30"
+                  >+</button>
+                </div>
+              )}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PresetLogoUpload({ preset, onUpload, onDelete, locked }) {
+  const fileRef = useRef();
+  const [uploading, setUploading] = useState(false);
+
+  const handleFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    try { await onUpload(file); } finally { setUploading(false); e.target.value = ''; }
+  };
+
+  return (
+    <div className="space-y-2">
+      {preset.logoFile && (
+        <div className="flex items-center gap-2 p-2 rounded-md border border-border bg-secondary/30">
+          <img
+            src={`http://localhost:5001/preset-logos/${preset.id}/${preset.logoFile}`}
+            alt="Logo preview"
+            className="h-8 object-contain rounded"
+          />
+          <span className="text-xs text-muted-foreground truncate flex-1">{preset.logoFile}</span>
+          {!locked && (
+            <button onClick={onDelete} className="text-muted-foreground hover:text-destructive transition-colors">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={uploading || locked}>
+          {uploading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+          {preset.logoFile ? 'Replace Logo' : 'Upload Logo'}
+        </Button>
+        {!preset.logoFile && (
+          <span className="text-xs text-muted-foreground flex items-center gap-1">
+            <Image className="w-3 h-3" /> PNG, JPG, SVG
+          </span>
+        )}
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+      </div>
+      <p className="text-xs text-muted-foreground/60">Logo is saved per-preset and used automatically when this preset is active.</p>
     </div>
   );
 }

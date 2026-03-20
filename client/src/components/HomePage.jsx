@@ -1,12 +1,19 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
   Film, ImagePlus, Clock, RefreshCw,
   Repeat2, Sliders, ArrowRight, Download, X, Filter,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const API = 'http://localhost:5001';
 const isImage = (f) => /\.(jpe?g|png|webp|gif)$/i.test(f);
+
+const SESSION_TOKEN = (() => {
+  let t = sessionStorage.getItem('vg_session');
+  if (!t) { t = Math.random().toString(36).slice(2) + Date.now().toString(36); sessionStorage.setItem('vg_session', t); }
+  return t;
+})();
 
 const DATE_OPTIONS = [
   { value: 'all',   label: 'All time' },
@@ -19,16 +26,15 @@ function inDateRange(dateStr, range) {
   if (range === 'all') return true;
   const d = new Date(dateStr);
   const now = new Date();
-  if (range === 'today') {
-    return d.toDateString() === now.toDateString();
-  }
+  if (range === 'today') return d.toDateString() === now.toDateString();
   const ms = range === 'week' ? 7 * 86400000 : 30 * 86400000;
   return now - d <= ms;
 }
 
-export default function HomePage({ user, onNavigate, onReplicate }) {
-  const [jobs, setJobs]     = useState([]);
+export default function HomePage({ user, onNavigate }) {
+  const [jobs, setJobs]       = useState([]);
   const [loading, setLoading] = useState(true);
+  const pollRef               = useRef(null);
 
   // ── Filters ────────────────────────────────────────────────────────────────
   const [filterDate,       setFilterDate]       = useState('all');
@@ -36,17 +42,45 @@ export default function HomePage({ user, onNavigate, onReplicate }) {
   const [filterResolution, setFilterResolution] = useState('all');
   const [filterPreset,     setFilterPreset]     = useState('all');
 
-  useEffect(() => {
-    fetch(`${API}/api/jobs?page=1&limit=100`)
-      .then(r => r.json())
-      .then(d => setJobs(d.jobs || []))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+  const loadJobs = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/jobs?page=1&limit=100`);
+      const d   = await res.json();
+      setJobs(d.jobs || []);
+    } catch {}
+    setLoading(false);
   }, []);
 
-  const doneJobs = useMemo(() => jobs.filter(j => j.status === 'done'), [jobs]);
+  useEffect(() => { loadJobs(); }, [loadJobs]);
 
-  // Derive unique filter options from the data
+  // Split into active (queued/running) and done
+  const activeJobs = useMemo(() => jobs.filter(j => j.status === 'queued' || j.status === 'running'), [jobs]);
+  const doneJobs   = useMemo(() => jobs.filter(j => j.status === 'done'), [jobs]);
+
+  // Poll while jobs are active
+  useEffect(() => {
+    clearInterval(pollRef.current);
+    if (activeJobs.length === 0) return;
+    pollRef.current = setInterval(loadJobs, 2000);
+    return () => clearInterval(pollRef.current);
+  }, [activeJobs.length, loadJobs]);
+
+  // Replicate — re-fire the exact same generation
+  const handleReplicateHere = useCallback(async (job) => {
+    if (!job.generationParams) return;
+    const params   = { ...job.generationParams, sessionToken: SESSION_TOKEN };
+    const endpoint = job.type === 'post' ? '/api/generate-posts' : '/api/generate';
+    try {
+      await fetch(`${API}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      loadJobs();
+    } catch {}
+  }, [loadJobs]);
+
+  // Derive unique filter options from done jobs
   const resolutionOptions = useMemo(() => {
     const seen = new Set();
     doneJobs.forEach(j => j.resolution && seen.add(j.resolution));
@@ -59,23 +93,23 @@ export default function HomePage({ user, onNavigate, onReplicate }) {
     return [...seen.values()].sort();
   }, [doneJobs]);
 
-  // Apply filters
+  // Apply filters to done jobs
   const filteredJobs = useMemo(() => doneJobs.filter(j => {
     if (filterDate !== 'all'       && !inDateRange(j.createdAt, filterDate)) return false;
     if (filterType !== 'all'       && j.type !== filterType)                  return false;
     if (filterResolution !== 'all' && j.resolution !== filterResolution)      return false;
     if (filterPreset !== 'all') {
-      if (filterPreset === '__none__' && j.presetName)   return false;
-      if (filterPreset !== '__none__' && j.presetName !== filterPreset) return false;
+      if (filterPreset === '__none__' && j.presetName)                         return false;
+      if (filterPreset !== '__none__' && j.presetName !== filterPreset)        return false;
     }
     return true;
   }), [doneJobs, filterDate, filterType, filterResolution, filterPreset]);
 
   const activeFilters = [
-    filterDate !== 'all'       && { key: 'date',       label: DATE_OPTIONS.find(o => o.value === filterDate)?.label,   clear: () => setFilterDate('all') },
-    filterType !== 'all'       && { key: 'type',       label: filterType === 'post' ? 'Posts' : 'Videos',              clear: () => setFilterType('all') },
-    filterResolution !== 'all' && { key: 'res',        label: filterResolution,                                         clear: () => setFilterResolution('all') },
-    filterPreset !== 'all'     && { key: 'preset',     label: filterPreset === '__none__' ? 'No preset' : filterPreset, clear: () => setFilterPreset('all') },
+    filterDate !== 'all'       && { key: 'date',  label: DATE_OPTIONS.find(o => o.value === filterDate)?.label,    clear: () => setFilterDate('all') },
+    filterType !== 'all'       && { key: 'type',  label: filterType === 'post' ? 'Posts' : 'Videos',               clear: () => setFilterType('all') },
+    filterResolution !== 'all' && { key: 'res',   label: filterResolution,                                          clear: () => setFilterResolution('all') },
+    filterPreset !== 'all'     && { key: 'pres',  label: filterPreset === '__none__' ? 'No preset' : filterPreset,  clear: () => setFilterPreset('all') },
   ].filter(Boolean);
 
   const clearAll = () => {
@@ -112,7 +146,15 @@ export default function HomePage({ user, onNavigate, onReplicate }) {
       {/* Recent generations */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Recent Generations</h3>
+          <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
+            Recent Generations
+            {activeJobs.length > 0 && (
+              <span className="ml-2 inline-flex items-center gap-1 text-xs font-normal text-primary normal-case tracking-normal">
+                <RefreshCw className="w-3 h-3 animate-spin" />
+                {activeJobs.length} generating…
+              </span>
+            )}
+          </h3>
           <button onClick={() => onNavigate('history')} className="flex items-center gap-1 text-xs text-primary hover:underline">
             View all <ArrowRight className="w-3 h-3" />
           </button>
@@ -126,14 +168,8 @@ export default function HomePage({ user, onNavigate, onReplicate }) {
                 <Filter className="w-3.5 h-3.5" /> Filter:
               </div>
 
-              {/* Date */}
-              <FilterSelect
-                value={filterDate}
-                onChange={setFilterDate}
-                options={DATE_OPTIONS}
-              />
+              <FilterSelect value={filterDate} onChange={setFilterDate} options={DATE_OPTIONS} />
 
-              {/* Type */}
               <FilterSelect
                 value={filterType}
                 onChange={setFilterType}
@@ -144,7 +180,6 @@ export default function HomePage({ user, onNavigate, onReplicate }) {
                 ]}
               />
 
-              {/* Resolution */}
               {resolutionOptions.length > 1 && (
                 <FilterSelect
                   value={filterResolution}
@@ -156,7 +191,6 @@ export default function HomePage({ user, onNavigate, onReplicate }) {
                 />
               )}
 
-              {/* Preset */}
               {presetOptions.length > 0 && (
                 <FilterSelect
                   value={filterPreset}
@@ -170,27 +204,18 @@ export default function HomePage({ user, onNavigate, onReplicate }) {
               )}
 
               {activeFilters.length > 0 && (
-                <button
-                  onClick={clearAll}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
-                >
+                <button onClick={clearAll} className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-1">
                   Clear all
                 </button>
               )}
             </div>
 
-            {/* Active filter pills */}
             {activeFilters.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {activeFilters.map(f => (
-                  <span
-                    key={f.key}
-                    className="pill-in flex items-center gap-1 text-xs bg-primary/10 text-primary border border-primary/20 rounded-full px-2.5 py-0.5"
-                  >
+                  <span key={f.key} className="pill-in flex items-center gap-1 text-xs bg-primary/10 text-primary border border-primary/20 rounded-full px-2.5 py-0.5">
                     {f.label}
-                    <button onClick={f.clear} className="hover:text-primary/60 transition-colors">
-                      <X className="w-3 h-3" />
-                    </button>
+                    <button onClick={f.clear} className="hover:text-primary/60 transition-colors"><X className="w-3 h-3" /></button>
                   </span>
                 ))}
                 <span className="text-xs text-muted-foreground self-center">
@@ -205,7 +230,7 @@ export default function HomePage({ user, onNavigate, onReplicate }) {
           <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
             <RefreshCw className="w-4 h-4 animate-spin" /> Loading…
           </div>
-        ) : filteredJobs.length === 0 ? (
+        ) : activeJobs.length === 0 && filteredJobs.length === 0 ? (
           doneJobs.length === 0
             ? <EmptyState onNavigate={onNavigate} />
             : (
@@ -217,15 +242,84 @@ export default function HomePage({ user, onNavigate, onReplicate }) {
             )
         ) : (
           <div style={{ columns: '260px 3', columnGap: '1rem' }}>
+            {/* Active / loading cards first */}
+            {activeJobs.map((job, i) => (
+              <div key={job.id} className="card-in" style={{ breakInside: 'avoid', marginBottom: '1rem', animationDelay: `${i * 40}ms` }}>
+                <LoadingCard job={job} />
+              </div>
+            ))}
+            {/* Done cards */}
             {filteredJobs.map((job, i) => (
               <div
                 key={job.id}
                 className="card-in"
-                style={{ breakInside: 'avoid', marginBottom: '1rem', animationDelay: `${i * 40}ms` }}
+                style={{ breakInside: 'avoid', marginBottom: '1rem', animationDelay: `${(activeJobs.length + i) * 40}ms` }}
               >
-                <JobCard job={job} onReplicate={onReplicate} />
+                <JobCard job={job} onReplicate={handleReplicateHere} />
               </div>
             ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Loading card (queued / running job) ────────────────────────────────────────
+function LoadingCard({ job }) {
+  const [w, h] = (job.resolution || '16x9').split('x').map(Number);
+  const aspectRatio = (w && h) ? `${w} / ${h}` : '16 / 9';
+
+  return (
+    <div className="rounded-xl border border-primary/20 bg-card overflow-hidden pulse-ring">
+      {/* Animated placeholder */}
+      <div
+        className="relative bg-muted flex items-center justify-center"
+        style={{ aspectRatio }}
+      >
+        {/* Shimmer overlay */}
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-primary/5 to-transparent animate-[shimmer_1.8s_infinite]" />
+
+        <div className="flex flex-col items-center gap-2 text-muted-foreground z-10">
+          <RefreshCw className="w-7 h-7 animate-spin text-primary" />
+          <span className="text-xs font-semibold text-primary">
+            {job.status === 'queued' ? 'Queued' : 'Generating…'}
+          </span>
+        </div>
+
+        {/* Type badge */}
+        <div className="absolute top-2 left-2">
+          <span className={cn(
+            "text-xs font-semibold px-2 py-0.5 rounded-full",
+            job.type === 'post' ? "bg-purple-500/80 text-white" : "bg-primary/80 text-primary-foreground"
+          )}>
+            {job.type === 'post' ? 'Post' : 'Video'}
+          </span>
+        </div>
+      </div>
+
+      {/* Info */}
+      <div className="p-3 space-y-2">
+        <div>
+          <p className="text-sm font-semibold mono truncate">{job.batchName}</p>
+          <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+            <Clock className="w-3 h-3" />
+            {new Date(job.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+          </p>
+        </div>
+        {job.presetName && (
+          <div className="flex items-center gap-1.5 text-xs text-primary bg-primary/10 border border-primary/20 rounded-md px-2 py-1">
+            <Sliders className="w-3 h-3 flex-shrink-0" />
+            <span className="truncate">{job.presetName}</span>
+          </div>
+        )}
+        {/* Progress bar */}
+        {job.status === 'running' && typeof job.progress === 'number' && (
+          <div className="h-1 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all duration-700"
+              style={{ width: `${job.progress}%` }}
+            />
           </div>
         )}
       </div>
@@ -288,22 +382,44 @@ function resolveAspect(job) {
 
 // ── Job card ───────────────────────────────────────────────────────────────────
 function JobCard({ job, onReplicate }) {
-  const files      = job.outputFiles?.length > 0 ? job.outputFiles : (job.outputFile ? [job.outputFile] : []);
-  const preview    = files[0];
-  const count      = files.length;
+  const files       = job.outputFiles?.length > 0 ? job.outputFiles : (job.outputFile ? [job.outputFile] : []);
+  const count       = files.length;
   const aspectRatio = resolveAspect(job);
+
+  const [idx, setIdx]       = useState(0);
+  const [replicating, setReplicating] = useState(false);
+  const videoRef            = useRef(null);
+  const current             = files[idx];
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = 0;
+    }
+  }, [idx]);
+
+  const prev = (e) => { e.stopPropagation(); setIdx(i => (i - 1 + count) % count); };
+  const next = (e) => { e.stopPropagation(); setIdx(i => (i + 1) % count); };
+
+  const handleReplicate = async () => {
+    if (replicating) return;
+    setReplicating(true);
+    try { await onReplicate(job); } finally { setReplicating(false); }
+  };
 
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden group hover:border-border/80 transition-all">
-      {/* Thumbnail */}
+      {/* Thumbnail / carousel */}
       <div className="relative bg-muted overflow-hidden" style={{ aspectRatio }}>
-        {preview ? (
-          isImage(preview) ? (
-            <img src={`${API}/outputs/${preview}`} alt="" className="w-full h-auto block" loading="lazy" />
+        {current ? (
+          isImage(current) ? (
+            <img key={current} src={`${API}/outputs/${current}`} alt="" className="w-full h-auto block fade-in" loading="lazy" />
           ) : (
             <video
-              src={`${API}/outputs/${preview}`}
-              className="w-full h-auto block"
+              key={current}
+              ref={videoRef}
+              src={`${API}/outputs/${current}`}
+              className="w-full h-auto block fade-in"
               preload="metadata"
               muted
               onMouseEnter={e => e.currentTarget.play()}
@@ -316,26 +432,42 @@ function JobCard({ job, onReplicate }) {
           </div>
         )}
 
-        {/* Type + count badge */}
-        <div className="absolute top-2 left-2 flex items-center gap-1.5">
+        {/* Type badge */}
+        <div className="absolute top-2 left-2">
           <span className={cn(
             "text-xs font-semibold px-2 py-0.5 rounded-full",
             job.type === 'post' ? "bg-purple-500/80 text-white" : "bg-primary/80 text-primary-foreground"
           )}>
             {job.type === 'post' ? 'Post' : 'Video'}
           </span>
-          {count > 1 && (
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-black/50 text-white">
-              {count} files
-            </span>
-          )}
         </div>
 
-        {/* Download button — bottom-right corner */}
-        {preview && (
+        {/* Carousel controls */}
+        {count > 1 && (
+          <>
+            <button onClick={prev} className="absolute left-1.5 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-black/60 hover:bg-black/80 text-white opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button onClick={next} className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-black/60 hover:bg-black/80 text-white opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            <div className="absolute bottom-8 left-0 right-0 flex justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              {files.map((_, i) => (
+                <button key={i} onClick={e => { e.stopPropagation(); setIdx(i); }}
+                  className={cn("rounded-full transition-all", i === idx ? "w-3 h-1.5 bg-white" : "w-1.5 h-1.5 bg-white/50 hover:bg-white/80")} />
+              ))}
+            </div>
+            <span className="absolute top-2 right-2 text-xs font-semibold px-2 py-0.5 rounded-full bg-black/60 text-white backdrop-blur-sm">
+              {idx + 1}/{count}
+            </span>
+          </>
+        )}
+
+        {/* Download */}
+        {current && (
           <a
-            href={`${API}/outputs/${preview}`}
-            download={preview.split('/').pop()}
+            href={`${API}/outputs/${current}`}
+            download={current.split('/').pop()}
             onClick={e => e.stopPropagation()}
             className="absolute bottom-2 right-2 w-7 h-7 flex items-center justify-center rounded-full bg-black/60 hover:bg-black/80 text-white opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm"
             title="Download"
@@ -344,23 +476,6 @@ function JobCard({ job, onReplicate }) {
           </a>
         )}
       </div>
-
-      {/* Per-file download list for multi-file jobs */}
-      {count > 1 && (
-        <div className="px-3 pt-2 pb-1 flex flex-wrap gap-1.5 border-b border-border">
-          {files.map((f, i) => (
-            <a
-              key={f}
-              href={`${API}/outputs/${f}`}
-              download={f.split('/').pop()}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded px-2 py-0.5"
-              title={f.split('/').pop()}
-            >
-              <Download className="w-2.5 h-2.5" /> {i + 1}
-            </a>
-          ))}
-        </div>
-      )}
 
       {/* Info */}
       <div className="p-3 space-y-2">
@@ -381,10 +496,14 @@ function JobCard({ job, onReplicate }) {
 
         {job.generationParams && (
           <button
-            onClick={() => onReplicate(job)}
-            className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold h-8 rounded-md border border-border hover:border-primary/40 hover:text-primary transition-all text-muted-foreground"
+            onClick={handleReplicate}
+            disabled={replicating}
+            className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold h-8 rounded-md border border-border hover:border-primary/40 hover:text-primary transition-all text-muted-foreground disabled:opacity-60"
           >
-            <Repeat2 className="w-3.5 h-3.5" /> Replicate
+            {replicating
+              ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Queuing…</>
+              : <><Repeat2 className="w-3.5 h-3.5" /> Replicate</>
+            }
           </button>
         )}
       </div>

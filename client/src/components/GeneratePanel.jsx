@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import LyricsPanel from './LyricsPanel';
+import FontPicker from './FontPicker';
 import {
   Clapperboard, Play, Upload, RefreshCw, Check, AlertCircle,
-  Download, Trash2, Music, Monitor, FileText, Sliders, Lock, X, Hash
+  Download, Trash2, Music, Monitor, FileText, Sliders, Lock, X, Type
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -27,74 +28,70 @@ const RESOLUTION_ICONS = {
   '2160x3840': '📲',
 };
 
-export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activePreset, onPresetUpdated, onClearPreset, onJobComplete, presets, onApplyPreset, onOpenBatches, replicateParams, onReplicateConsumed }) {
-  const [logoText, setLogoText]             = useState('');
-  const [logoSubtext, setLogoSubtext]       = useState('');
-  const [textMaxChars, setTextMaxChars]     = useState('20');
+export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activePreset, onPresetUpdated, onClearPreset, onJobComplete, presets, onApplyPreset, onOpenBatches }) {
+  const [quotes, setQuotes]                     = useState('');
+  const [fontFamily, setFontFamily]             = useState('default');
+  const [fontSize, setFontSize]                 = useState('52');
+  const [textMaxChars, setTextMaxChars]         = useState('20');
   const [preferredDuration, setPreferredDuration] = useState('20');
-  const [sliceDuration, setSliceDuration]   = useState('3');
-  const [imageDuration, setImageDuration]   = useState('0.2');
-  const [resolution, setResolution]         = useState('1920x1080');
-  const [videoCount, setVideoCount]         = useState(1);
-  const [resolutions, setResolutions]       = useState([]);
-  const [batchFiles, setBatchFiles]         = useState({ videos: [], images: [] });
-  const [selectedVideos, setSelectedVideos] = useState([]);
-  const [selectedImages, setSelectedImages] = useState([]);
-  const [logoFile, setLogoFile]             = useState(null);
-  const [uploadingLogo, setUploadingLogo]   = useState(false);
+  const [sliceDuration, setSliceDuration]       = useState('3');
+  const [imageDuration, setImageDuration]       = useState('0.2');
+  const [selectedResolutions, setSelectedResolutions] = useState(['1920x1080']);
+  const [resolutionCounts, setResolutionCounts] = useState({}); // { key: count }
+  const [videoCount, setVideoCount]             = useState(1);
+  const [availableResolutions, setAvailableResolutions] = useState([]);
+  const [batchFiles, setBatchFiles]             = useState({ videos: [], images: [] });
+  const [selectedVideos, setSelectedVideos]     = useState([]);
+  const [selectedImages, setSelectedImages]     = useState([]);
+  const [logoFile, setLogoFile]                 = useState(null);
+  const [uploadingLogo, setUploadingLogo]       = useState(false);
 
-  const [srtFile, setSrtFile]               = useState(null);
-  const [audioFile, setAudioFile]           = useState(null);
-  const [uploadingSrt, setUploadingSrt]     = useState(false);
-  const [uploadingAudio, setUploadingAudio] = useState(false);
+  const [srtFile, setSrtFile]                   = useState(null);
+  const [audioFile, setAudioFile]               = useState(null);
+  const [uploadingSrt, setUploadingSrt]         = useState(false);
+  const [uploadingAudio, setUploadingAudio]     = useState(false);
 
-  const [generating, setGenerating]         = useState(false);
-  const [jobId, setJobId]                   = useState(null);
-  const [job, setJob]                       = useState(null);
-  const logoInputRef  = useRef();
-  const srtInputRef   = useRef();
-  const audioInputRef = useRef();
-  const pollRef       = useRef();
+  const [generating, setGenerating]             = useState(false);
+  const [jobIds, setJobIds]                     = useState([]);
+  const [jobs, setJobs]                         = useState([]);
+  const logoInputRef   = useRef();
+  const srtInputRef    = useRef();
+  const quotesFileRef  = useRef();
+  const audioInputRef  = useRef();
+  const pollRef        = useRef();
 
   const locked = activePreset?.locked ?? false;
 
   // When a preset is applied, populate all fields from it
   useEffect(() => {
     if (!activePreset) return;
-    setResolution(activePreset.resolution || '1920x1080');
+    if (activePreset.resolutionEntries?.length) {
+      setSelectedResolutions(activePreset.resolutionEntries.map(e => e.key));
+      const counts = {};
+      activePreset.resolutionEntries.forEach(e => { counts[e.key] = e.count || 1; });
+      setResolutionCounts(counts);
+    } else {
+      setSelectedResolutions([activePreset.resolution || '1920x1080']);
+      setResolutionCounts({ [activePreset.resolution || '1920x1080']: activePreset.videoCount || 1 });
+    }
     setSliceDuration(String(activePreset.sliceDuration ?? 3));
     setImageDuration(String(activePreset.imageDuration ?? 0.2));
-    setLogoText(activePreset.logoText || '');
-    setLogoSubtext(activePreset.logoSubtext || '');
+    setFontFamily(activePreset.fontFamily || 'default');
+    if (activePreset.layout?.subtitles?.fontSize) setFontSize(String(activePreset.layout.subtitles.fontSize));
     setTextMaxChars(String(activePreset.textMaxChars ?? 20));
     setPreferredDuration(String(activePreset.preferredDuration ?? 20));
     setVideoCount(activePreset.videoCount ?? 1);
     // File selections are batch-specific — not loaded from preset
   }, [activePreset?.id]); // re-run only when a different preset is applied
 
-  // Apply replicated params from home page dashboard
-  useEffect(() => {
-    if (!replicateParams) return;
-    const p = replicateParams;
-    if (p.resolution)        setResolution(p.resolution);
-    if (p.sliceDuration)     setSliceDuration(String(p.sliceDuration));
-    if (p.imageDuration)     setImageDuration(String(p.imageDuration));
-    if (p.logoText != null)  setLogoText(p.logoText);
-    if (p.logoSubtext != null) setLogoSubtext(p.logoSubtext);
-    if (p.textMaxChars)      setTextMaxChars(String(p.textMaxChars));
-    if (p.preferredDuration) setPreferredDuration(String(p.preferredDuration));
-    if (p.videoCount)        setVideoCount(p.videoCount);
-    if (p.videoFiles)        setSelectedVideos(p.videoFiles);
-    if (p.imageFiles)        setSelectedImages(p.imageFiles);
-    onReplicateConsumed?.();
-  }, [replicateParams]);
-
   // Auto-save current field values back to active preset (debounced)
-  const saveBackRef = useRef(null);
-  const saveBackToPreset = (patch) => {
+  const saveBackTimerRef = useRef(null);
+  // Use a ref so the resolution useEffect always calls the latest version
+  const saveBackFnRef = useRef(null);
+  const saveBackToPreset = useCallback((patch) => {
     if (!activePreset || locked) return;
-    if (saveBackRef.current) clearTimeout(saveBackRef.current);
-    saveBackRef.current = setTimeout(async () => {
+    if (saveBackTimerRef.current) clearTimeout(saveBackTimerRef.current);
+    saveBackTimerRef.current = setTimeout(async () => {
       await fetch(`${API}/api/presets/${activePreset.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -102,23 +99,49 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
       });
       onPresetUpdated?.(patch);
     }, 800);
-  };
+  }, [activePreset, locked, onPresetUpdated]);
+  saveBackFnRef.current = saveBackToPreset;
 
   // Wrapped setters that also save back to preset
-  const setAndSaveResolution = (v) => { setResolution(v); saveBackToPreset({ resolution: v }); };
+  const toggleResolution = (key) => {
+    setSelectedResolutions(prev => {
+      if (prev.includes(key)) {
+        if (prev.length === 1) return prev;
+        return prev.filter(r => r !== key);
+      }
+      const next = [...prev, key];
+      setResolutionCounts(c => ({ ...c, [key]: c[key] ?? 1 }));
+      return next;
+    });
+  };
+
+  const adjustCount = (key, delta) => {
+    setResolutionCounts(prev => ({
+      ...prev,
+      [key]: Math.max(1, Math.min(20, (prev[key] ?? 1) + delta)),
+    }));
+  };
+
+  // Auto-save resolution entries to preset when selections or counts change
+  useEffect(() => {
+    const entries = selectedResolutions.map(key => ({ key, count: resolutionCounts[key] ?? 1 }));
+    saveBackFnRef.current?.({ resolution: selectedResolutions[0], resolutionEntries: entries });
+  }, [selectedResolutions, resolutionCounts]); // eslint-disable-line
+
   const setAndSaveSlice = (v) => { setSliceDuration(v); saveBackToPreset({ sliceDuration: Number(v) || 3 }); };
   const setAndSaveImageDur = (v) => { setImageDuration(v); saveBackToPreset({ imageDuration: Number(v) || 0.2 }); };
-  const setAndSaveLogoText = (v) => { setLogoText(v); saveBackToPreset({ logoText: v }); };
-  const setAndSaveLogoSubtext = (v) => { setLogoSubtext(v); saveBackToPreset({ logoSubtext: v }); };
+  const setAndSaveQuotes      = (v) => { setQuotes(v); }; // quotes are per-generation, not saved to preset
+  const setAndSaveFontFamily  = (v) => { setFontFamily(v); saveBackToPreset({ fontFamily: v }); };
+  const setAndSaveFontSize    = (v) => { setFontSize(v); saveBackToPreset({ 'layout.subtitles.fontSize': Number(v) || 52 }); };
   const setAndSaveTextMaxChars = (v) => { setTextMaxChars(v); saveBackToPreset({ textMaxChars: Number(v) || 0 }); };
   const setAndSavePreferredDuration = (v) => { setPreferredDuration(v); saveBackToPreset({ preferredDuration: Number(v) || 0 }); };
   const setAndSaveVideos    = (v) => { setSelectedVideos(v); }; // not saved to preset — batch-specific
   const setAndSaveImages    = (v) => { setSelectedImages(v); }; // not saved to preset — batch-specific
   const setAndSaveVideoCount = (v) => { setVideoCount(v); saveBackToPreset({ videoCount: v }); };
 
-  // Load resolutions
+  // Load available resolutions
   useEffect(() => {
-    fetch(`${API}/api/resolutions`).then(r => r.json()).then(setResolutions).catch(() => {});
+    fetch(`${API}/api/resolutions`).then(r => r.json()).then(setAvailableResolutions).catch(() => {});
   }, []);
 
   // Load batch files when batch or trigger changes
@@ -146,23 +169,25 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
     });
   }, []);
 
-  // Poll job status
+  // Poll all active job statuses
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobIds.length) return;
     const poll = async () => {
-      const res = await fetch(`${API}/api/jobs/${jobId}`);
-      const j = await res.json();
-      setJob(j);
-      if (j.status !== 'done' && j.status !== 'error') {
+      const results = await Promise.all(
+        jobIds.map(id => fetch(`${API}/api/jobs/${id}`).then(r => r.json()))
+      );
+      setJobs(results);
+      const anyActive = results.some(j => j.status !== 'done' && j.status !== 'error');
+      if (anyActive) {
         pollRef.current = setTimeout(poll, 1200);
       } else {
         setGenerating(false);
-        onJobComplete?.(j);
+        results.forEach(j => onJobComplete?.(j));
       }
     };
     poll();
     return () => clearTimeout(pollRef.current);
-  }, [jobId]);
+  }, [jobIds]);
 
   const uploadLogo = async (file) => {
     setUploadingLogo(true);
@@ -206,32 +231,47 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
   const generate = async () => {
     if (!selectedBatch) return;
     setGenerating(true);
-    setJob(null);
+    setJobs([]);
+    setJobIds([]);
     try {
-      const res = await fetch(`${API}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          batchName: selectedBatch,
-          videoFiles: selectedVideos,
-          imageFiles: selectedImages,
-          logoText, logoSubtext,
-          textMaxChars: Number(textMaxChars) || 0,
-          preferredDuration: Number(preferredDuration) || 0,
-          sliceDuration: Number(sliceDuration) || 3,
-          imageDuration: Number(imageDuration) || 0.2,
-          resolution,
-          sessionToken: SESSION_TOKEN,
-          presetId: activePreset?.id || null,
-          videoCount: Number(videoCount) || 1,
+      const baseParams = {
+        batchName: selectedBatch,
+        videoFiles: selectedVideos,
+        imageFiles: selectedImages,
+        quotes,
+        fontFamily,
+        fontSize: Number(fontSize) || 52,
+        textMaxChars: Number(textMaxChars) || 0,
+        preferredDuration: Number(preferredDuration) || 0,
+        sliceDuration: Number(sliceDuration) || 3,
+        imageDuration: Number(imageDuration) || 0.2,
+        sessionToken: SESSION_TOKEN,
+        presetId: activePreset?.id || null,
+      };
+      const ids = await Promise.all(
+        selectedResolutions.map(async (res) => {
+          const count = resolutionCounts[res] ?? 1;
+          const r = await fetch(`${API}/api/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...baseParams, resolution: res, videoCount: count }),
+          });
+          const { jobId } = await r.json();
+          return jobId;
         })
-      });
-      const { jobId: id } = await res.json();
-      setJobId(id);
+      );
+      setJobIds(ids);
     } catch { setGenerating(false); }
   };
 
   const hasContent = selectedVideos.length > 0 || selectedImages.length > 0;
+
+  // Pre-compute generate button label (avoid IIFE in JSX)
+  const totalVideos = selectedResolutions.reduce((sum, r) => sum + (resolutionCounts[r] ?? 1), 0);
+  const btnResLabel = selectedResolutions.map(r => {
+    const c = resolutionCounts[r] ?? 1;
+    return c > 1 ? `${c}×${r}` : r;
+  }).join(', ');
 
   return (
     <div className="space-y-5">
@@ -418,32 +458,62 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
                 <Monitor className="w-4 h-4 text-primary" /> Resolution
+                {selectedResolutions.length > 1 && (
+                  <Badge className="text-xs bg-primary/20 text-primary border-primary/30 ml-1">
+                    {selectedResolutions.length} selected — {selectedResolutions.length} jobs
+                  </Badge>
+                )}
               </CardTitle>
-              <CardDescription>Output video dimensions — applies to both video slices and image slideshow</CardDescription>
+              <CardDescription>Select one or more — each resolution generates a separate video</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-1 gap-2">
-                {resolutions.map(r => (
-                  <button
-                    key={r.key}
-                    onClick={() => !locked && setAndSaveResolution(r.key)}
-                    disabled={locked}
-                    className={cn(
-                      "flex items-center gap-3 px-4 py-3 rounded-lg border text-left transition-all",
-                      resolution === r.key
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border hover:border-border/80 text-muted-foreground hover:text-foreground",
-                      locked && "opacity-60 cursor-not-allowed"
-                    )}
-                  >
-                    <span className="text-xl">{RESOLUTION_ICONS[r.key]}</span>
-                    <div>
-                      <div className={cn("text-sm font-semibold mono", resolution === r.key && "text-primary")}>{r.key}</div>
-                      <div className="text-xs text-muted-foreground">{r.label.split('—')[1]?.trim()}</div>
-                    </div>
-                    {resolution === r.key && <Check className="w-4 h-4 text-primary ml-auto" />}
-                  </button>
-                ))}
+                {availableResolutions.map(r => {
+                  const selected = selectedResolutions.includes(r.key);
+                  const count = resolutionCounts[r.key] ?? 1;
+                  return (
+                    <button
+                      key={r.key}
+                      onClick={() => !locked && toggleResolution(r.key)}
+                      disabled={locked}
+                      className={cn(
+                        "flex items-center gap-3 px-4 py-3 rounded-lg border text-left transition-all",
+                        selected
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border hover:border-border/80 text-muted-foreground hover:text-foreground",
+                        locked && "opacity-60 cursor-not-allowed"
+                      )}
+                    >
+                      <span className="text-xl">{RESOLUTION_ICONS[r.key]}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className={cn("text-sm font-semibold mono", selected && "text-primary")}>{r.key}</div>
+                        <div className="text-xs text-muted-foreground">{r.label.split('—')[1]?.trim()}</div>
+                      </div>
+                      {selected && (
+                        <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                          <button
+                            onClick={() => adjustCount(r.key, -1)}
+                            disabled={locked || count <= 1}
+                            className="w-6 h-6 rounded border border-border hover:border-primary/60 hover:bg-primary/10 text-sm font-bold flex items-center justify-center transition-all disabled:opacity-30"
+                          >−</button>
+                          <span className="w-6 text-center text-sm font-mono font-semibold text-primary">{count}</span>
+                          <button
+                            onClick={() => adjustCount(r.key, 1)}
+                            disabled={locked || count >= 20}
+                            className="w-6 h-6 rounded border border-border hover:border-primary/60 hover:bg-primary/10 text-sm font-bold flex items-center justify-center transition-all disabled:opacity-30"
+                          >+</button>
+                          <span className="text-xs text-muted-foreground ml-1">video{count !== 1 ? 's' : ''}</span>
+                        </div>
+                      )}
+                      <div className={cn(
+                        "w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-all",
+                        selected ? "border-primary bg-primary" : "border-muted-foreground/40"
+                      )}>
+                        {selected && <Check className="w-2.5 h-2.5 text-primary-foreground" />}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
@@ -482,49 +552,99 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
 
               <Separator />
 
-              {/* Text overlays */}
+              {/* Quotes */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <Label className="text-xs uppercase tracking-widest text-muted-foreground">Text Overlay</Label>
-                  {srtFile && (
-                    <span className="text-xs text-yellow-400 flex items-center gap-1">
-                      <FileText className="w-3 h-3" /> SRT active — text fields ignored
+                  <Label className="text-xs uppercase tracking-widest text-muted-foreground">Quotes</Label>
+                  <div className="flex items-center gap-2">
+                    {srtFile && (
+                      <span className="text-xs text-yellow-400 flex items-center gap-1">
+                        <FileText className="w-3 h-3" /> SRT active — quotes ignored
+                      </span>
+                    )}
+                    <Button
+                      variant="outline" size="sm"
+                      onClick={() => quotesFileRef.current?.click()}
+                      disabled={!!srtFile || locked}
+                      className="h-6 px-2 text-xs"
+                    >
+                      <Upload className="w-3 h-3 mr-1" /> .txt
+                    </Button>
+                    <input
+                      ref={quotesFileRef}
+                      type="file"
+                      accept=".txt"
+                      className="hidden"
+                      onChange={e => {
+                        const file = e.target.files[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (ev) => setAndSaveQuotes(ev.target.result);
+                        reader.readAsText(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </div>
+                </div>
+                <textarea
+                  placeholder={"One quote per line — each video picks one at random\n\nExamples:\nBelieve in yourself\nWork hard, dream big\n@yourbrand"}
+                  value={quotes}
+                  onChange={e => setAndSaveQuotes(e.target.value)}
+                  disabled={!!srtFile || locked}
+                  rows={5}
+                  className={cn(
+                    "w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 resize-y mono",
+                    (srtFile || locked) && "opacity-40 cursor-not-allowed"
+                  )}
+                />
+                {quotes.trim() && (
+                  <p className="text-xs text-muted-foreground">
+                    {quotes.split('\n').filter(l => l.trim()).length} quote{quotes.split('\n').filter(l => l.trim()).length !== 1 ? 's' : ''} — one will be randomly selected per video
+                  </p>
+                )}
+                <div className="flex items-center gap-2 pt-1">
+                  <Label className="text-xs text-muted-foreground whitespace-nowrap">Max chars / line</Label>
+                  <Input
+                    type="number"
+                    min="0" max="200" step="1"
+                    value={textMaxChars}
+                    onChange={e => setAndSaveTextMaxChars(e.target.value)}
+                    onBlur={e => { if (e.target.value === '' || isNaN(Number(e.target.value))) setAndSaveTextMaxChars('0'); }}
+                    disabled={!!srtFile || locked}
+                    className={(srtFile || locked) ? 'opacity-40 w-24' : 'w-24'}
+                    placeholder="0 = off"
+                  />
+                  {Number(textMaxChars) > 0 && (
+                    <span className="text-xs text-muted-foreground">
+                      wraps at {textMaxChars} chars
                     </span>
                   )}
                 </div>
-                <div className="space-y-2">
+              </div>
+
+              <Separator />
+
+              {/* Font settings */}
+              <div className="space-y-3">
+                <Label className="text-xs uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+                  <Type className="w-3 h-3" /> Font
+                </Label>
+                <FontPicker
+                  value={fontFamily}
+                  onChange={setAndSaveFontFamily}
+                  previewText={quotes}
+                  disabled={locked}
+                />
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-muted-foreground whitespace-nowrap">Font size (px at 1080p)</Label>
                   <Input
-                    placeholder="Title text (e.g. My Brand)"
-                    value={logoText}
-                    onChange={e => setAndSaveLogoText(e.target.value)}
-                    disabled={!!srtFile || locked}
-                    className={(srtFile || locked) ? 'opacity-40' : ''}
+                    type="number" min="12" max="300" step="1"
+                    value={fontSize}
+                    onChange={e => setAndSaveFontSize(e.target.value)}
+                    onBlur={e => { if (!e.target.value || isNaN(Number(e.target.value))) setFontSize('52'); }}
+                    disabled={locked}
+                    className={cn("w-24", locked && "opacity-40")}
                   />
-                  <Input
-                    placeholder="Subtitle text (e.g. @handle)"
-                    value={logoSubtext}
-                    onChange={e => setAndSaveLogoSubtext(e.target.value)}
-                    disabled={!!srtFile || locked}
-                    className={(srtFile || locked) ? 'opacity-40' : ''}
-                  />
-                  <div className="flex items-center gap-2 pt-1">
-                    <Label className="text-xs text-muted-foreground whitespace-nowrap">Max chars / line</Label>
-                    <Input
-                      type="number"
-                      min="0" max="200" step="1"
-                      value={textMaxChars}
-                      onChange={e => setAndSaveTextMaxChars(e.target.value)}
-                      onBlur={e => { if (e.target.value === '' || isNaN(Number(e.target.value))) setAndSaveTextMaxChars('0'); }}
-                      disabled={!!srtFile || locked}
-                      className={(srtFile || locked) ? 'opacity-40 w-24' : 'w-24'}
-                      placeholder="0 = off"
-                    />
-                    {Number(textMaxChars) > 0 && (
-                      <span className="text-xs text-muted-foreground">
-                        wraps at {textMaxChars} chars
-                      </span>
-                    )}
-                  </div>
                 </div>
               </div>
 
@@ -622,38 +742,19 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
               )}
             </CardContent>
           </Card>
-          {/* Number of videos */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Hash className="w-4 h-4 text-primary" /> Number of Videos
-              </CardTitle>
-              <CardDescription>Generate multiple unique videos in one run. If more than 1, outputs are saved in a folder.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-3">
-                <Input
-                  type="number" min="1" max="20" step="1"
-                  value={videoCount}
-                  disabled={locked}
-                  className="w-24"
-                  onChange={e => setAndSaveVideoCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
-                />
-                <span className="text-sm text-muted-foreground">
-                  {videoCount > 1 ? `${videoCount} videos will be generated` : 'Single video'}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-
         <Button className="w-full h-12 text-base font-bold" onClick={generate} disabled={generating || !hasContent}>
-          {generating
-            ? <><RefreshCw className="w-4 h-4 animate-spin" /> Generating...</>
-            : <><Play className="w-4 h-4" /> Generate Video</>
-          }
+          {generating ? (
+            <><RefreshCw className="w-4 h-4 animate-spin" /> Generating...</>
+          ) : (
+            <><Play className="w-4 h-4" /> Generate {totalVideos > 1 ? `${totalVideos} Videos` : 'Video'}{selectedResolutions.length > 1 ? ` — ${btnResLabel}` : ''}</>
+          )}
         </Button>
 
-        {job && <JobStatus job={job} />}
+        {jobs.length > 0 && (
+          <div className="space-y-3">
+            {jobs.map(j => <JobStatus key={j.id} job={j} />)}
+          </div>
+        )}
       </>
     </div>
   );
@@ -694,6 +795,9 @@ function JobStatus({ job }) {
             {job.status === 'done'    && <Check className="w-3.5 h-3.5 text-green-400" />}
             {job.status === 'error'   && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
             <span className="text-sm font-semibold">Job {job.id.slice(0, 8)}...</span>
+            {job.resolution && (
+              <Badge variant="secondary" className="text-xs mono">{job.resolution}</Badge>
+            )}
           </div>
           <span className={cn("text-xs px-2 py-0.5 rounded-full font-semibold", statusColors[job.status])}>
             {job.status.toUpperCase()}
