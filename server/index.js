@@ -31,6 +31,7 @@ const PRESET_LOGOS_DIR = path.join(DATA_ROOT, 'preset_logos');
 
 app.use('/outputs', express.static(OUTPUT_DIR));
 app.use('/assets', express.static(ASSETS_DIR));
+app.use('/overlays', express.static(OVERLAYS_DIR));
 
 // ─── Supported Resolutions ───────────────────────────────────────────────────
 const RESOLUTIONS = {
@@ -793,7 +794,7 @@ app.post('/api/generate-posts', async (req, res) => {
 
 // ─── Video Generation ─────────────────────────────────────────────────────────
 async function runGeneration(job, opts) {
-  const { batchName, videoFiles, imageFiles, logoText, logoSubtext, quotes, textMaxChars, preferredDuration, sliceDuration, imageDuration, resolution, sessionToken, layout, presetId, videoCount = 1, fontFamily = 'default', fontSize = null, presetLogoFile = null } = opts;
+  const { batchName, videoFiles, imageFiles, logoText, logoSubtext, quotes, textMaxChars, preferredDuration, sliceDuration, imageDuration, resolution, sessionToken, layout, presetId, videoCount = 1, fontFamily = 'default', fontSize = null, presetLogoFile = null, audioVolume = 1, audioStart = 0, audioEnd = 0 } = opts;
   const quoteLines = (quotes || '').split('\n').map(q => q.trim()).filter(Boolean);
   const batchDir = path.join(BATCHES_DIR, batchName);
 
@@ -1196,6 +1197,15 @@ async function runGeneration(job, opts) {
           const limitArgs = preferredDuration > 0
             ? ['-t', String(preferredDuration)]
             : ['-shortest'];
+          const audioFilters = [];
+          if (audioStart > 0 || audioEnd > 0) {
+            const trimFilter = audioEnd > 0
+              ? `atrim=start=${audioStart}:end=${audioEnd}`
+              : `atrim=start=${audioStart}`;
+            audioFilters.push(trimFilter, 'asetpts=PTS-STARTPTS');
+          }
+          if (audioVolume !== 1) audioFilters.push(`volume=${audioVolume}`);
+
           await ffmpegRun([
             '-i', silentOut,
             '-i', audioPath,
@@ -1204,6 +1214,7 @@ async function runGeneration(job, opts) {
             '-c:v', assPath ? 'copy' : 'libx264',
             ...(assPath ? [] : ['-preset', 'fast', '-crf', '23']),
             '-c:a', 'aac', '-b:a', '192k',
+            ...(audioFilters.length > 0 ? ['-af', audioFilters.join(',')] : []),
             ...limitArgs,
             '-y', muxTarget
           ]);

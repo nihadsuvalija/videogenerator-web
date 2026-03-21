@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import LyricsPanel from './LyricsPanel';
 import FontPicker from './FontPicker';
 import {
-  Clapperboard, Play, Upload, RefreshCw, Check, AlertCircle,
+  Clapperboard, Play, Pause, Upload, RefreshCw, Check, AlertCircle,
   Download, Trash2, Music, Monitor, FileText, Sliders, Lock, X, Type, Sparkles,
-  Film, Image
+  Film, Image, Volume2, VolumeX, Scissors,
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -50,6 +50,11 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
 
   const [srtFile, setSrtFile]                   = useState(null);
   const [audioFile, setAudioFile]               = useState(null);
+  const [audioVolume, setAudioVolume]           = useState(80);
+  const [audioDuration, setAudioDuration]       = useState(0);
+  const [audioStart, setAudioStart]             = useState(0);
+  const [audioEnd, setAudioEnd]                 = useState(0); // 0 = until end
+  const [isPlaying, setIsPlaying]               = useState(false);
   const [uploadingSrt, setUploadingSrt]         = useState(false);
   const [uploadingAudio, setUploadingAudio]     = useState(false);
 
@@ -62,6 +67,7 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
   const srtInputRef    = useRef();
   const quotesFileRef  = useRef();
   const audioInputRef  = useRef();
+  const audioPreviewRef = useRef();
   const pollRef        = useRef();
 
   const locked = activePreset?.locked ?? false;
@@ -221,14 +227,29 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
       const fd = new FormData();
       fd.append('audio', file);
       await fetch(`${API}/api/assets/audio/${SESSION_TOKEN}`, { method: 'POST', body: fd });
-      setAudioFile(file.name);
+      // Re-fetch to get the actual server-side filename (token + ext)
+      const res = await fetch(`${API}/api/assets/overlays/${SESSION_TOKEN}`);
+      const d = await res.json();
+      setAudioFile(d.audio || null);
     } finally { setUploadingAudio(false); }
   };
+
+  // Reset clip range whenever the audio file changes
+  useEffect(() => {
+    setAudioStart(0);
+    setAudioEnd(0);
+    setAudioDuration(0);
+    setIsPlaying(false);
+  }, [audioFile]);
 
   const removeOverlay = async (type) => {
     await fetch(`${API}/api/assets/overlays/${SESSION_TOKEN}/${type}`, { method: 'DELETE' });
     if (type === 'srt') setSrtFile(null);
-    else setAudioFile(null);
+    else {
+      audioPreviewRef.current?.pause();
+      setIsPlaying(false);
+      setAudioFile(null);
+    }
   };
 
   const toggleVideo = f => setSelectedVideos(p => p.includes(f) ? p.filter(x => x !== f) : [...p, f]);
@@ -251,6 +272,9 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
         preferredDuration: Number(preferredDuration) || 0,
         sliceDuration: Number(sliceDuration) || 3,
         imageDuration: Number(imageDuration) || 0.2,
+        audioVolume: audioVolume / 100,
+        audioStart: audioStart || 0,
+        audioEnd: audioEnd || 0,
         sessionToken: SESSION_TOKEN,
         presetId: activePreset?.id || null,
       };
@@ -689,6 +713,7 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
               <CardDescription>MP3 mixed into the output — ends with the shorter of video or audio</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Upload row */}
               <div className="flex flex-wrap items-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => audioInputRef.current?.click()} disabled={uploadingAudio}>
                   {uploadingAudio ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Music className="w-3 h-3" />}
@@ -700,8 +725,82 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
                     <button onClick={() => removeOverlay('audio')} className="text-muted-foreground hover:text-destructive transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
                   </>
                 )}
-                <input ref={audioInputRef} type="file" accept=".mp3,.m4a,.wav" className="hidden" onChange={e => e.target.files[0] && uploadAudio(e.target.files[0])} />
+                <input ref={audioInputRef} type="file" accept=".mp3,.m4a,.wav" className="hidden"
+                  onChange={e => { if (e.target.files[0]) { audioPreviewRef.current?.pause(); setIsPlaying(false); uploadAudio(e.target.files[0]); } }} />
               </div>
+
+              {/* Preview + volume + clip (shown once a file is loaded) */}
+              {audioFile && (
+                <>
+                  {/* Hidden audio element for preview */}
+                  <audio
+                    ref={audioPreviewRef}
+                    src={`${API}/overlays/${audioFile}`}
+                    preload="metadata"
+                    onLoadedMetadata={e => setAudioDuration(e.target.duration || 0)}
+                    onEnded={() => setIsPlaying(false)}
+                  />
+
+                  {/* ── Volume row ── */}
+                  <div className="flex items-center gap-3 p-3 rounded-lg bg-secondary/50 border border-border">
+                    <button
+                      onClick={() => {
+                        const el = audioPreviewRef.current;
+                        if (!el) return;
+                        if (isPlaying) { el.pause(); setIsPlaying(false); }
+                        else {
+                          el.volume = audioVolume / 100;
+                          // Only seek to audioStart when starting from scratch,
+                          // not when resuming from a paused position
+                          const effEnd = audioEnd > 0 ? audioEnd : audioDuration;
+                          if (el.currentTime < audioStart || el.currentTime >= effEnd) {
+                            el.currentTime = audioStart || 0;
+                          }
+                          el.play();
+                          setIsPlaying(true);
+                        }
+                      }}
+                      className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground hover:opacity-90 transition-opacity flex-shrink-0"
+                    >
+                      {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
+                    </button>
+                    <button
+                      onClick={() => {
+                        const next = audioVolume === 0 ? 80 : 0;
+                        setAudioVolume(next);
+                        if (audioPreviewRef.current) audioPreviewRef.current.volume = next / 100;
+                      }}
+                      className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+                    >
+                      {audioVolume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                    </button>
+                    <input
+                      type="range" min="0" max="100" step="1" value={audioVolume}
+                      onChange={e => {
+                        const v = Number(e.target.value);
+                        setAudioVolume(v);
+                        if (audioPreviewRef.current) audioPreviewRef.current.volume = v / 100;
+                      }}
+                      className="flex-1 h-1.5 accent-primary cursor-pointer"
+                    />
+                    <span className="text-xs font-mono text-muted-foreground w-9 text-right flex-shrink-0">
+                      {audioVolume}%
+                    </span>
+                  </div>
+
+                  {/* ── Clip range ── */}
+                  <AudioClip
+                    audioSrc={`${API}/overlays/${audioFile}`}
+                    audioRef={audioPreviewRef}
+                    duration={audioDuration}
+                    start={audioStart}
+                    end={audioEnd}
+                    onStartChange={setAudioStart}
+                    onEndChange={setAudioEnd}
+                    onPause={() => setIsPlaying(false)}
+                  />
+                </>
+              )}
               {audioFile && (
                 <>
                   <Separator />
@@ -776,6 +875,316 @@ export default function GeneratePanel({ selectedBatch, fileRefreshTrigger, activ
         </div>{/* end RIGHT */}
 
       </div>{/* end grid */}
+    </div>
+  );
+}
+
+function formatTime(secs) {
+  if (!secs || isNaN(secs)) return '0:00';
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function AudioClip({ audioSrc, audioRef, duration, start, end, onStartChange, onEndChange, onPause }) {
+  const canvasRef          = useRef(null);
+  const containerRef       = useRef(null);
+  const draggingRef        = useRef(null);
+  const playheadHandleRef  = useRef(null); // draggable playhead div
+  const playheadLabelRef   = useRef(null); // floating time label
+  const drawRef            = useRef(null); // always points to latest draw fn
+  const latestRef          = useRef({});   // always holds latest props/state
+
+  const [waveform, setWaveform] = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [dragging, setDragging] = useState(null);
+
+  const effectiveEnd = end > 0 ? end : duration;
+  const startPct     = duration > 0 ? (start / duration) * 100 : 0;
+  const endPct       = duration > 0 ? (effectiveEnd / duration) * 100 : 100;
+  const hasClip      = start > 0 || (end > 0 && end < duration);
+
+  // Always keep the latest values accessible inside the rAF loop
+  latestRef.current = { waveform, start, end, duration, onPause };
+
+  // ── Draw fn assigned to ref — rAF calls drawRef.current() so it's always fresh ──
+  drawRef.current = () => {
+    const canvas    = canvasRef.current;
+    const container = containerRef.current;
+    const { waveform, start, end, duration, onPause } = latestRef.current;
+    if (!canvas || !container || !waveform) return;
+
+    const dpr  = window.devicePixelRatio || 1;
+    const W    = container.clientWidth;
+    const H    = container.clientHeight;
+
+    // Resize canvas only when dimensions actually changed
+    if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
+      canvas.width  = W * dpr;
+      canvas.height = H * dpr;
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const primary      = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
+    const effectiveEnd = end > 0 ? end : duration;
+    const startRatio   = duration > 0 ? start / duration : 0;
+    const endRatio     = duration > 0 ? effectiveEnd / duration : 1;
+    const barW         = W / waveform.length;
+
+    // Waveform bars
+    waveform.forEach((amp, i) => {
+      const ratio   = i / waveform.length;
+      const x       = ratio * W;
+      const bH      = Math.max(2, amp * H * 0.88);
+      const y       = (H - bH) / 2;
+      const inRange = ratio >= startRatio && ratio <= endRatio;
+      ctx.fillStyle = inRange ? `hsl(${primary})` : `hsl(${primary} / 0.18)`;
+      ctx.fillRect(x + 0.5, y, Math.max(1, barW - 1), bH);
+    });
+
+    // Stop playback at clip end
+    const el = audioRef?.current;
+    if (el && !el.paused && end > 0 && el.currentTime >= end) {
+      el.pause();
+      onPause?.();
+    }
+
+    // Playhead — always draw when audio is loaded
+    if (el && duration > 0 && el.readyState >= 1) {
+      const ct = el.currentTime;
+      const px = (ct / duration) * W;
+
+      // Thin white line on canvas
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fillRect(px - 1, 0, 2, H);
+
+      // Position draggable handle div via direct DOM — no React re-render at 60fps
+      if (playheadHandleRef.current) {
+        playheadHandleRef.current.style.left    = `${px - 6}px`;
+        playheadHandleRef.current.style.display = '';
+      }
+
+      // Update playhead label via direct DOM manipulation — avoids 60fps re-renders
+      if (playheadLabelRef.current) {
+        playheadLabelRef.current.textContent = formatTime(ct);
+        playheadLabelRef.current.style.display = '';
+        // Position the label under the playhead, clamped to container edges
+        const labelW = 36;
+        const left   = Math.max(0, Math.min(px - labelW / 2, W - labelW));
+        playheadLabelRef.current.style.left = `${left}px`;
+      }
+      // Hide label when paused
+      if (el.paused && playheadLabelRef.current) playheadLabelRef.current.style.display = 'none';
+    } else {
+      if (playheadHandleRef.current) playheadHandleRef.current.style.display = 'none';
+      if (playheadLabelRef.current)  playheadLabelRef.current.style.display  = 'none';
+    }
+  };
+
+  // ── Single persistent rAF loop — setup once, never re-created ───────────────
+  useEffect(() => {
+    let raf;
+    const loop = () => { drawRef.current?.(); raf = requestAnimationFrame(loop); };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []); // eslint-disable-line
+
+  // ── ResizeObserver ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => drawRef.current?.());
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, []); // eslint-disable-line
+
+  // ── Decode audio → waveform peaks ───────────────────────────────────────────
+  useEffect(() => {
+    if (!audioSrc) return;
+    let cancelled = false;
+    setLoading(true);
+    setWaveform(null);
+
+    const actx = new (window.AudioContext || window.webkitAudioContext)();
+    fetch(audioSrc)
+      .then(r => r.arrayBuffer())
+      .then(buf => actx.decodeAudioData(buf))
+      .then(decoded => {
+        if (cancelled) return;
+        const raw   = decoded.getChannelData(0);
+        const BINS  = 220;
+        const block = Math.floor(raw.length / BINS);
+        const peaks = Array.from({ length: BINS }, (_, i) => {
+          let max = 0;
+          for (let j = 0; j < block; j++) {
+            const v = Math.abs(raw[i * block + j]);
+            if (v > max) max = v;
+          }
+          return max;
+        });
+        const globalMax = Math.max(...peaks, 0.001);
+        setWaveform(peaks.map(p => p / globalMax));
+      })
+      .catch(() => {})
+      .finally(() => { setLoading(false); actx.close().catch(() => {}); });
+
+    return () => { cancelled = true; };
+  }, [audioSrc]);
+
+  // ── Drag logic ───────────────────────────────────────────────────────────────
+  const getTime = useCallback((clientX) => {
+    const rect  = containerRef.current.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return ratio * latestRef.current.duration;
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      const h = draggingRef.current;
+      if (!h) return;
+      const { start, end, duration } = latestRef.current;
+      const effEnd = end > 0 ? end : duration;
+      const t = getTime(e.clientX);
+      if (h === 'start') {
+        onStartChange(Math.max(0, Math.min(t, effEnd - 0.5)));
+      } else if (h === 'end') {
+        onEndChange(Math.max(start + 0.5, Math.min(t, duration)));
+      } else if (h === 'playhead') {
+        const el = audioRef?.current;
+        if (el) el.currentTime = Math.max(start, Math.min(t, effEnd));
+      }
+    };
+    const onUp = () => { draggingRef.current = null; setDragging(null); };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [getTime, onStartChange, onEndChange]);
+
+  const startDrag = (handle) => (e) => {
+    e.preventDefault();
+    draggingRef.current = handle;
+    setDragging(handle);
+  };
+
+  return (
+    <div className="space-y-2 p-3 rounded-lg bg-secondary/50 border border-border">
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium flex items-center gap-1.5 text-muted-foreground">
+          <Scissors className="w-3.5 h-3.5" /> Clip Range
+        </span>
+        <div className="flex items-center gap-3">
+          {hasClip && (
+            <span className="text-xs font-mono text-primary">
+              {formatTime(effectiveEnd - start)} selected
+            </span>
+          )}
+          <span className="text-xs text-muted-foreground font-mono">{formatTime(duration)}</span>
+          {hasClip && (
+            <button
+              onClick={() => { onStartChange(0); onEndChange(0); }}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Waveform canvas + handles */}
+      <div
+        ref={containerRef}
+        className="relative h-16 rounded-md overflow-hidden bg-muted/30"
+        style={{ cursor: dragging ? 'ew-resize' : 'crosshair' }}
+        onMouseDown={(e) => {
+          // Skip if clicking on a drag handle
+          if (e.target.closest('[data-handle]')) return;
+          const el = audioRef?.current;
+          if (!el || !latestRef.current.duration) return;
+          const { start, end, duration: dur } = latestRef.current;
+          const effEnd = end > 0 ? end : dur;
+          const rect   = containerRef.current.getBoundingClientRect();
+          const ratio  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+          el.currentTime = Math.max(start, Math.min(ratio * dur, effEnd));
+        }}
+      >
+        {loading ? (
+          <div className="absolute inset-0 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Analyzing audio…
+          </div>
+        ) : (
+          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+        )}
+
+        {/* Shaded regions outside selection */}
+        {!loading && (
+          <>
+            <div className="absolute inset-y-0 left-0 bg-background/50 pointer-events-none"
+              style={{ width: `${startPct}%` }} />
+            <div className="absolute inset-y-0 right-0 bg-background/50 pointer-events-none"
+              style={{ left: `${endPct}%` }} />
+          </>
+        )}
+
+        {/* Start handle */}
+        {!loading && (
+          <div
+            data-handle
+            className="absolute inset-y-0 z-10 flex items-center justify-center cursor-ew-resize"
+            style={{ left: `calc(${startPct}% - 6px)`, width: 12 }}
+            onMouseDown={startDrag('start')}
+          >
+            <div className="w-[2px] h-full bg-primary" />
+            <div className="absolute top-1/2 -translate-y-1/2 w-3.5 h-7 bg-primary rounded flex items-center justify-center gap-[2px] shadow-md">
+              <div className="w-px h-3 bg-primary-foreground/60 rounded-full" />
+              <div className="w-px h-3 bg-primary-foreground/60 rounded-full" />
+            </div>
+          </div>
+        )}
+
+        {/* End handle */}
+        {!loading && (
+          <div
+            data-handle
+            className="absolute inset-y-0 z-10 flex items-center justify-center cursor-ew-resize"
+            style={{ left: `calc(${endPct}% - 6px)`, width: 12 }}
+            onMouseDown={startDrag('end')}
+          >
+            <div className="w-[2px] h-full bg-primary" />
+            <div className="absolute top-1/2 -translate-y-1/2 w-3.5 h-7 bg-primary rounded flex items-center justify-center gap-[2px] shadow-md">
+              <div className="w-px h-3 bg-primary-foreground/60 rounded-full" />
+              <div className="w-px h-3 bg-primary-foreground/60 rounded-full" />
+            </div>
+          </div>
+        )}
+
+        {/* Draggable playhead handle — positioned via direct DOM ref in rAF loop */}
+        <div
+          ref={playheadHandleRef}
+          data-handle
+          onMouseDown={startDrag('playhead')}
+          className="absolute inset-y-0 z-20 flex items-center justify-center cursor-grab active:cursor-grabbing"
+          style={{ width: 12, display: 'none' }}
+        >
+          <div className="w-3 h-3 rounded-full bg-white shadow-md border border-white/40 mt-[-20px] relative top-0" style={{ marginTop: 4 }} />
+        </div>
+
+        {/* Playhead time label — positioned absolutely, updated via direct DOM ref */}
+        <span
+          ref={playheadLabelRef}
+          className="absolute bottom-1 text-[10px] font-mono font-semibold text-white drop-shadow pointer-events-none z-20"
+          style={{ display: 'none' }}
+        />
+      </div>
+
+      {/* Start / end time labels */}
+      <div className="flex items-center justify-between text-xs font-mono">
+        <span className="text-primary">{formatTime(start)}</span>
+        <span className="text-muted-foreground">{formatTime(effectiveEnd)}</span>
+      </div>
     </div>
   );
 }
