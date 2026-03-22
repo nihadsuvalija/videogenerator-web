@@ -32,6 +32,7 @@ const PRESET_LOGOS_DIR = path.join(DATA_ROOT, 'preset_logos');
 app.use('/outputs', express.static(OUTPUT_DIR));
 app.use('/assets', express.static(ASSETS_DIR));
 app.use('/overlays', express.static(OVERLAYS_DIR));
+app.use('/batches-media', express.static(BATCHES_DIR));
 
 // ─── Supported Resolutions ───────────────────────────────────────────────────
 const RESOLUTIONS = {
@@ -106,6 +107,8 @@ const JobSchema = new mongoose.Schema({
   outputFiles:  [String],   // array of output file paths for multi-video jobs
   outputFolder: String,     // folder name when multiple videos are generated
   type:         { type: String, default: 'video' }, // 'video' | 'post'
+  videoQuotes:  [{ file: String, quote: String }],  // quote used for each output file
+  videoMetadata: { type: mongoose.Schema.Types.Mixed, default: null }, // per-file generated metadata
   duration:    Number,
   videoFiles:  [String],
   imageFiles:  [String],
@@ -966,7 +969,21 @@ async function runGeneration(job, opts) {
     // ── Multi-video loop ──────────────────────────────────────────────────────
     const effectiveCount = Math.max(1, Math.min(20, Math.round(videoCount)));
     let outputFolder = null;
-    const allOutputFiles = [];
+    const allOutputFiles  = [];
+    const allVideoQuotes  = [];
+    const allVideoMetadata = {};
+
+    // Detect best available llama model once (best-effort — metadata is optional)
+    let ollamaModel = null;
+    try {
+      const tr = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(3000) });
+      if (tr.ok) {
+        const { models = [] } = await tr.json();
+        const names = models.map(m => m.name);
+        ollamaModel = names.find(n => n.includes('llama3')) || names.find(n => n.includes('llama')) || null;
+      }
+    } catch {}
+    if (ollamaModel) await addLog(`Metadata model: ${ollamaModel}`);
 
     if (effectiveCount > 1) {
       outputFolder = `${batchName.replace(/\s+/g, '_')}_${Date.now()}`;
@@ -1267,7 +1284,20 @@ async function runGeneration(job, opts) {
         lastClips    = clips;
         lastDuration = totalDuration;
         allOutputFiles.push(storedName);
+        allVideoQuotes.push({ file: storedName, quote: videoQuote });
         await addLog(`Video ${vidIdx + 1} complete: ${storedName}`);
+
+        // ── Auto-generate metadata (best-effort, won't fail the job) ─────────
+        if (ollamaModel && videoQuote) {
+          try {
+            await addLog(`Generating metadata for video ${vidIdx + 1}…`);
+            const meta = await generateVideoMeta(videoQuote, resolution, ollamaModel);
+            if (Object.keys(meta).length > 0) {
+              allVideoMetadata[storedName] = meta;
+              await addLog(`Metadata ready: ${Object.keys(meta).join(', ')}`);
+            }
+          } catch { /* metadata is optional */ }
+        }
 
       } finally {
         fs.rmSync(localTmpDir, { recursive: true, force: true });
@@ -1276,8 +1306,10 @@ async function runGeneration(job, opts) {
 
     await setStatus('done', 100);
     await Job.updateOne({ id: job.id }, { $set: {
-      outputFile:   allOutputFiles[0],
-      outputFiles:  allOutputFiles,
+      outputFile:    allOutputFiles[0],
+      outputFiles:   allOutputFiles,
+      videoQuotes:   allVideoQuotes,
+      ...(Object.keys(allVideoMetadata).length > 0 ? { videoMetadata: allVideoMetadata } : {}),
       ...(outputFolder ? { outputFolder } : {}),
       duration: lastDuration,
       clips:    lastClips,
@@ -1631,6 +1663,39 @@ function ffmpegRun(args) {
 // ─── Metadata Generation (Ollama / Llama2) ───────────────────────────────────
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 
+// ─── Shared metadata generation helper ───────────────────────────────────────
+async function generateVideoMeta(quote, resolution, model) {
+  const [rw, rh] = (resolution || '1920x1080').split('x').map(Number);
+  const platformIds = (rw > rh) ? ['youtube'] : ['youtube', 'instagram', 'tiktok'];
+  const prompts = {
+    youtube: `You are a YouTube SEO expert. Generate metadata for a video whose caption/quote is: "${quote}"
+Respond ONLY with valid JSON, no other text:
+{"title":"SEO-optimized title (max 70 chars)","description":"Description with keywords and CTA (250-350 chars)","tags":["t1","t2","t3","t4","t5","t6","t7","t8","t9","t10"],"hashtags":["h1","h2","h3"]}`,
+    instagram: `You are an Instagram Reels expert. Generate metadata for a short video whose caption/quote is: "${quote}"
+Respond ONLY with valid JSON, no other text:
+{"title":"Hook caption (max 10 words)","caption":"Caption with emojis and CTA (150-220 chars)","hashtags":["h1","h2","h3","h4","h5","h6","h7","h8","h9","h10","h11","h12","h13","h14","h15"]}`,
+    tiktok: `You are a TikTok strategist. Generate metadata for a short video whose caption/quote is: "${quote}"
+Respond ONLY with valid JSON, no other text:
+{"title":"Scroll-stopping hook (max 10 words)","caption":"Punchy TikTok caption with emojis and CTA (100-160 chars)","hashtags":["fyp","foryou","h3","h4","h5","h6","h7","h8","h9","h10"]}`,
+  };
+  const results = {};
+  for (const pid of platformIds) {
+    try {
+      const r = await fetch(`${OLLAMA_URL}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, prompt: prompts[pid], stream: false, options: { temperature: 0.75, top_p: 0.9 } }),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!r.ok) continue;
+      const data = await r.json();
+      const m = (data.response || '').match(/\{[\s\S]*\}/);
+      if (m) results[pid] = JSON.parse(m[0]);
+    } catch {}
+  }
+  return results;
+}
+
 app.get('/api/ollama/status', async (req, res) => {
   try {
     const r = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(3000) });
@@ -1705,37 +1770,65 @@ Quotes:`;
 app.post('/api/metadata/generate', async (req, res) => {
   const { platform, topic, tone, extraContext, model } = req.body;
   if (!platform || !topic) return res.status(400).json({ error: 'platform and topic required' });
-  const selectedModel = model || 'llama2';
+
+  // Auto-detect best available llama3 model, fall back to any llama, then caller-supplied
+  let selectedModel = model || 'llama3';
+  try {
+    const tagsRes = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    if (tagsRes.ok) {
+      const { models = [] } = await tagsRes.json();
+      const names = models.map(m => m.name);
+      const llama3 = names.find(n => n.includes('llama3'));
+      const llama  = names.find(n => n.includes('llama'));
+      if (llama3) selectedModel = llama3;
+      else if (llama) selectedModel = llama;
+    }
+  } catch {}
+
+  const toneStr = tone || 'engaging and authentic';
+  const ctx = extraContext ? `Extra context: ${extraContext}` : '';
+
   const platformPrompts = {
-    instagram: `You are a social media expert specializing in Instagram content.
-Generate Instagram post metadata for a video about: "${topic}"
-Tone: ${tone || 'engaging and casual'}
-${extraContext ? `Extra context: ${extraContext}` : ''}
-Respond ONLY with valid JSON in this exact format, no other text:
-{
-  "title": "A catchy Instagram caption title (max 10 words)",
-  "caption": "Full Instagram caption with emojis, engaging text (150-200 chars)",
-  "hashtags": ["hashtag1","hashtag2","hashtag3","hashtag4","hashtag5","hashtag6","hashtag7","hashtag8","hashtag9","hashtag10"]
-}`,
     youtube: `You are a YouTube SEO and content expert.
 Generate YouTube video metadata for a video about: "${topic}"
-Tone: ${tone || 'professional and informative'}
-${extraContext ? `Extra context: ${extraContext}` : ''}
+Tone: ${toneStr}
+${ctx}
 Respond ONLY with valid JSON in this exact format, no other text:
 {
   "title": "SEO-optimized YouTube title (max 70 chars, include keywords)",
   "description": "Full YouTube description with timestamps placeholder, keywords, and call to action (250-350 chars)",
   "tags": ["tag1","tag2","tag3","tag4","tag5","tag6","tag7","tag8","tag9","tag10"],
   "hashtags": ["hashtag1","hashtag2","hashtag3"]
+}`,
+    instagram: `You are a social media expert specializing in Instagram Reels content.
+Generate Instagram post metadata for a short vertical video about: "${topic}"
+Tone: ${toneStr}
+${ctx}
+Respond ONLY with valid JSON in this exact format, no other text:
+{
+  "title": "A catchy caption hook (max 10 words, no hashtags)",
+  "caption": "Full Instagram caption with emojis, engaging text, ends with a CTA (150-220 chars)",
+  "hashtags": ["hashtag1","hashtag2","hashtag3","hashtag4","hashtag5","hashtag6","hashtag7","hashtag8","hashtag9","hashtag10","hashtag11","hashtag12","hashtag13","hashtag14","hashtag15"]
+}`,
+    tiktok: `You are a TikTok content strategist specializing in viral short-form video.
+Generate TikTok post metadata for a short vertical video about: "${topic}"
+Tone: ${toneStr}
+${ctx}
+Respond ONLY with valid JSON in this exact format, no other text:
+{
+  "title": "A scroll-stopping TikTok hook caption (max 10 words, punchy)",
+  "caption": "TikTok caption: short, punchy, uses slang if appropriate, includes a clear CTA, emojis welcome (100-160 chars)",
+  "hashtags": ["fyp","foryou","hashtag3","hashtag4","hashtag5","hashtag6","hashtag7","hashtag8","hashtag9","hashtag10"]
 }`
   };
+
   const prompt = platformPrompts[platform];
   if (!prompt) return res.status(400).json({ error: 'unsupported platform' });
   try {
     const ollamaRes = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: selectedModel, prompt, stream: false, options: { temperature: 0.7, top_p: 0.9 } }),
+      body: JSON.stringify({ model: selectedModel, prompt, stream: false, options: { temperature: 0.75, top_p: 0.9 } }),
       signal: AbortSignal.timeout(120000)
     });
     if (!ollamaRes.ok) return res.status(500).json({ error: `Ollama error: ${await ollamaRes.text()}` });
@@ -1747,6 +1840,96 @@ Respond ONLY with valid JSON in this exact format, no other text:
     if (e.name === 'TimeoutError') return res.status(504).json({ error: 'Ollama timed out.' });
     res.status(500).json({ error: e.message });
   }
+});
+
+// ─── Per-job Metadata Generation ─────────────────────────────────────────────
+app.post('/api/jobs/:id/metadata/generate', async (req, res) => {
+  const job = await Job.findOne({ id: req.params.id });
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+
+  const { file, tone } = req.body;
+  const targetFile = file || job.outputFile;
+  if (!targetFile) return res.status(400).json({ error: 'No output file specified' });
+
+  // Find the quote that was used for this specific video file
+  const videoQuoteEntry = (job.videoQuotes || []).find(v => v.file === targetFile);
+  const quote = videoQuoteEntry?.quote
+    || (job.generationParams?.quotes || '').split('\n').map(l => l.trim()).filter(Boolean)[0]
+    || job.batchName
+    || 'video content';
+
+  // Determine platforms based on resolution: horizontal (w>h) = YouTube only
+  const resolution = job.resolution || '1920x1080';
+  const [rw, rh] = resolution.split('x').map(Number);
+  const platformIds = (rw > rh) ? ['youtube'] : ['youtube', 'instagram', 'tiktok'];
+
+  // Auto-detect best llama3 model
+  let model = 'llama3';
+  try {
+    const tagsRes = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    if (tagsRes.ok) {
+      const { models = [] } = await tagsRes.json();
+      const names = models.map(m => m.name);
+      const l3 = names.find(n => n.includes('llama3'));
+      const l  = names.find(n => n.includes('llama'));
+      if (l3) model = l3; else if (l) model = l;
+    }
+  } catch {}
+
+  const toneStr = tone || 'Engaging & Casual';
+  const platformPrompts = {
+    youtube: `You are a YouTube SEO and content expert.
+Generate YouTube video metadata for a video with this caption/quote: "${quote}"
+Tone: ${toneStr}
+Respond ONLY with valid JSON in this exact format, no other text:
+{
+  "title": "SEO-optimized YouTube title (max 70 chars, include keywords)",
+  "description": "Full YouTube description with keywords and call to action (250-350 chars)",
+  "tags": ["tag1","tag2","tag3","tag4","tag5","tag6","tag7","tag8","tag9","tag10"],
+  "hashtags": ["hashtag1","hashtag2","hashtag3"]
+}`,
+    instagram: `You are an Instagram Reels expert.
+Generate Instagram metadata for a short vertical video with this caption/quote: "${quote}"
+Tone: ${toneStr}
+Respond ONLY with valid JSON in this exact format, no other text:
+{
+  "title": "A catchy hook (max 10 words, no hashtags)",
+  "caption": "Instagram caption with emojis and CTA (150-220 chars)",
+  "hashtags": ["hashtag1","hashtag2","hashtag3","hashtag4","hashtag5","hashtag6","hashtag7","hashtag8","hashtag9","hashtag10","hashtag11","hashtag12","hashtag13","hashtag14","hashtag15"]
+}`,
+    tiktok: `You are a TikTok content strategist.
+Generate TikTok metadata for a short vertical video with this caption/quote: "${quote}"
+Tone: ${toneStr}
+Respond ONLY with valid JSON in this exact format, no other text:
+{
+  "title": "A scroll-stopping TikTok hook (max 10 words, punchy)",
+  "caption": "TikTok caption: short, punchy, emojis welcome, clear CTA (100-160 chars)",
+  "hashtags": ["fyp","foryou","hashtag3","hashtag4","hashtag5","hashtag6","hashtag7","hashtag8","hashtag9","hashtag10"]
+}`
+  };
+
+  const results = {};
+  for (const pid of platformIds) {
+    try {
+      const ollamaRes = await fetch(`${OLLAMA_URL}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, prompt: platformPrompts[pid], stream: false, options: { temperature: 0.75, top_p: 0.9 } }),
+        signal: AbortSignal.timeout(90000)
+      });
+      if (!ollamaRes.ok) continue;
+      const data = await ollamaRes.json();
+      const jsonMatch = (data.response || '').match(/\{[\s\S]*\}/);
+      if (jsonMatch) results[pid] = JSON.parse(jsonMatch[0]);
+    } catch {}
+  }
+
+  // Persist results on the job
+  const existing = (job.videoMetadata && typeof job.videoMetadata === 'object') ? { ...job.videoMetadata } : {};
+  existing[targetFile] = results;
+  await Job.updateOne({ id: job.id }, { $set: { videoMetadata: existing } });
+
+  res.json({ file: targetFile, quote, platforms: platformIds, results, model });
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────

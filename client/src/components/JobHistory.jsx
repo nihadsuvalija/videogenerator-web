@@ -3,6 +3,7 @@ import { RefreshCw, Download, AlertCircle, Check, Clock, ChevronDown, Pencil, Fi
 import { Card, CardContent, CardHeader, CardTitle, Progress } from './ui-primitives';
 import { Button } from './ui-button';
 import { cn } from '../lib/utils';
+import VideoMetadataPanel from './VideoMetadataPanel';
 
 const API = 'http://localhost:5001';
 const PAGE_SIZE = 10;
@@ -148,6 +149,22 @@ export default function JobHistory({ onOpenEditor }) {
                               />
                             ))}
                           </div>
+                        </div>
+                      )}
+
+                      {/* Per-video metadata generation */}
+                      {job.status === 'done' && job.type !== 'posts' && files.length > 0 && (
+                        <div className="space-y-1">
+                          {files.map(f => (
+                            <VideoMetadataPanel
+                              key={f}
+                              jobId={job.id}
+                              file={f}
+                              resolution={job.resolution}
+                              initialMetadata={job.videoMetadata?.[f] || null}
+                              initialQuote={(job.videoQuotes || []).find(v => v.file === f)?.quote || ''}
+                            />
+                          ))}
                         </div>
                       )}
 

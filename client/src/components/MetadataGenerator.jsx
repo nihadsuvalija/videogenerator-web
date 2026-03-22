@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Sparkles, Instagram, Youtube, Copy, Check, RefreshCw,
-  AlertCircle, ChevronDown, ChevronUp, Hash, Tag, FileText, Type, Zap
+  Sparkles, Youtube, Copy, Check, RefreshCw,
+  AlertCircle, ChevronDown, ChevronUp, Hash, Tag, FileText, Type, Zap,
+  Monitor, Smartphone,
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -17,38 +18,80 @@ const TONES = [
   'Inspirational', 'Educational', 'Bold & Direct'
 ];
 
-const PLATFORMS = [
-  {
-    id: 'instagram',
-    label: 'Instagram',
-    icon: Instagram,
-    color: 'from-pink-500 to-purple-600',
-    accent: 'pink',
-    fields: ['title', 'caption', 'hashtags'],
-  },
+// Custom icons for platforms without Lucide equivalents
+function InstagramIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+      <circle cx="12" cy="12" r="4"/>
+      <circle cx="17.5" cy="6.5" r="0.5" fill="currentColor"/>
+    </svg>
+  );
+}
+
+function TikTokIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.33 6.33 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.33-6.34V8.69a8.18 8.18 0 0 0 4.78 1.52V6.76a4.85 4.85 0 0 1-1.01-.07z"/>
+    </svg>
+  );
+}
+
+const ALL_PLATFORMS = [
   {
     id: 'youtube',
     label: 'YouTube',
     icon: Youtube,
     color: 'from-red-500 to-red-700',
-    accent: 'red',
+    accentClasses: {
+      tag:     'bg-red-500/10 border-red-500/20 text-red-300 hover:bg-red-500/20',
+      hashtag: 'bg-red-500/10 border-red-500/20 text-red-300 hover:bg-red-500/20',
+    },
+    orientations: ['horizontal', 'vertical'],
     fields: ['title', 'description', 'tags', 'hashtags'],
+  },
+  {
+    id: 'instagram',
+    label: 'Instagram',
+    icon: InstagramIcon,
+    color: 'from-pink-500 to-purple-600',
+    accentClasses: {
+      tag:     'bg-pink-500/10 border-pink-500/20 text-pink-300 hover:bg-pink-500/20',
+      hashtag: 'bg-pink-500/10 border-pink-500/20 text-pink-300 hover:bg-pink-500/20',
+    },
+    orientations: ['vertical'],
+    fields: ['title', 'caption', 'hashtags'],
+  },
+  {
+    id: 'tiktok',
+    label: 'TikTok',
+    icon: TikTokIcon,
+    color: 'from-cyan-400 to-pink-500',
+    accentClasses: {
+      tag:     'bg-cyan-500/10 border-cyan-500/20 text-cyan-300 hover:bg-cyan-500/20',
+      hashtag: 'bg-cyan-500/10 border-cyan-500/20 text-cyan-300 hover:bg-cyan-500/20',
+    },
+    orientations: ['vertical'],
+    fields: ['title', 'caption', 'hashtags'],
   },
 ];
 
 export default function MetadataGenerator() {
-  const [ollamaStatus, setOllamaStatus] = useState(null); // null | {running, models, hasLlama}
+  const [ollamaStatus, setOllamaStatus]   = useState(null);
   const [checkingOllama, setCheckingOllama] = useState(false);
-  const [topic, setTopic] = useState('');
-  const [tone, setTone] = useState(TONES[0]);
-  const [extraContext, setExtraContext] = useState('');
-  const [selectedModel, setSelectedModel] = useState('llama2');
-  const [activePlatform, setActivePlatform] = useState('instagram');
-  const [results, setResults] = useState({}); // { instagram: {...}, youtube: {...} }
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [copied, setCopied] = useState(null);
-  const [expandedField, setExpandedField] = useState(null);
+  const [topic, setTopic]                 = useState('');
+  const [tone, setTone]                   = useState(TONES[0]);
+  const [extraContext, setExtraContext]    = useState('');
+  const [selectedModel, setSelectedModel] = useState('llama3');
+  const [orientation, setOrientation]     = useState('vertical'); // 'horizontal' | 'vertical'
+  const [activePlatform, setActivePlatform] = useState('youtube');
+  const [results, setResults]             = useState({});
+  const [loading, setLoading]             = useState(false);
+  const [error, setError]                 = useState(null);
+  const [copied, setCopied]               = useState(null);
+
+  // Platforms available for the current orientation
+  const platforms = ALL_PLATFORMS.filter(p => p.orientations.includes(orientation));
 
   const checkOllama = useCallback(async () => {
     setCheckingOllama(true);
@@ -57,8 +100,10 @@ export default function MetadataGenerator() {
       const data = await res.json();
       setOllamaStatus(data);
       if (data.models?.length > 0) {
-        const llama = data.models.find(m => m.includes('llama2') || m.includes('llama'));
-        if (llama) setSelectedModel(llama);
+        const llama3 = data.models.find(m => m.includes('llama3'));
+        const llama  = data.models.find(m => m.includes('llama'));
+        if (llama3) setSelectedModel(llama3);
+        else if (llama) setSelectedModel(llama);
       }
     } catch {
       setOllamaStatus({ running: false });
@@ -69,20 +114,30 @@ export default function MetadataGenerator() {
 
   useEffect(() => { checkOllama(); }, [checkOllama]);
 
-  const generate = async (platform) => {
+  // Clear results for platforms not available in new orientation
+  useEffect(() => {
+    setResults(prev => {
+      const validIds = new Set(ALL_PLATFORMS.filter(p => p.orientations.includes(orientation)).map(p => p.id));
+      const next = {};
+      for (const [k, v] of Object.entries(prev)) { if (validIds.has(k)) next[k] = v; }
+      return next;
+    });
+  }, [orientation]);
+
+  const generateOne = async (platformId) => {
     if (!topic.trim()) return;
     setLoading(true);
     setError(null);
-    setActivePlatform(platform);
+    setActivePlatform(platformId);
     try {
       const res = await fetch(`${API}/api/metadata/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform, topic, tone, extraContext, model: selectedModel })
+        body: JSON.stringify({ platform: platformId, topic, tone, extraContext, model: selectedModel })
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      setResults(prev => ({ ...prev, [platform]: data.metadata }));
+      setResults(prev => ({ ...prev, [platformId]: data.metadata }));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -94,7 +149,7 @@ export default function MetadataGenerator() {
     if (!topic.trim()) return;
     setLoading(true);
     setError(null);
-    for (const p of PLATFORMS) {
+    for (const p of platforms) {
       setActivePlatform(p.id);
       try {
         const res = await fetch(`${API}/api/metadata/generate`, {
@@ -115,20 +170,22 @@ export default function MetadataGenerator() {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const formatForCopy = (platform, metadata) => {
+  const formatForCopy = (platformId, metadata) => {
     if (!metadata) return '';
-    if (platform === 'instagram') {
-      return `${metadata.title}\n\n${metadata.caption}\n\n${(metadata.hashtags || []).map(h => `#${h.replace(/^#/, '')}`).join(' ')}`;
+    const tags = (arr) => (arr || []).map(h => `#${h.replace(/^#/, '')}`).join(' ');
+    if (platformId === 'youtube') {
+      return `TITLE:\n${metadata.title}\n\nDESCRIPTION:\n${metadata.description}\n\nTAGS:\n${(metadata.tags || []).join(', ')}\n\nHASHTAGS:\n${tags(metadata.hashtags)}`;
     }
-    if (platform === 'youtube') {
-      return `TITLE:\n${metadata.title}\n\nDESCRIPTION:\n${metadata.description}\n\nTAGS:\n${(metadata.tags || []).join(', ')}\n\nHASHTAGS:\n${(metadata.hashtags || []).map(h => `#${h.replace(/^#/, '')}`).join(' ')}`;
+    if (platformId === 'instagram' || platformId === 'tiktok') {
+      return `${metadata.title}\n\n${metadata.caption}\n\n${tags(metadata.hashtags)}`;
     }
     return '';
   };
 
+  const canGenerate = !!topic.trim() && !!ollamaStatus?.running && !loading;
+
   return (
     <div className="space-y-6">
-      {/* Ollama Status Banner */}
       <OllamaStatusBanner
         status={ollamaStatus}
         checking={checkingOllama}
@@ -137,7 +194,6 @@ export default function MetadataGenerator() {
         onModelChange={setSelectedModel}
       />
 
-      {/* Input Form */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -145,10 +201,56 @@ export default function MetadataGenerator() {
             Metadata Generator
           </CardTitle>
           <CardDescription>
-            Describe your video and Llama 2 will generate platform-optimized metadata
+            Describe your video — Llama 3 generates platform-optimized titles, descriptions and hashtags
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+
+          {/* Content orientation */}
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase tracking-widest text-muted-foreground">Content Orientation</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setOrientation('horizontal')}
+                className={cn(
+                  "flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all",
+                  orientation === 'horizontal'
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:border-primary/40"
+                )}
+              >
+                <Monitor className="w-4 h-4" />
+                Horizontal <span className="text-xs opacity-60">(16:9)</span>
+              </button>
+              <button
+                onClick={() => setOrientation('vertical')}
+                className={cn(
+                  "flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all",
+                  orientation === 'vertical'
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:border-primary/40"
+                )}
+              >
+                <Smartphone className="w-4 h-4" />
+                Vertical / Square
+              </button>
+            </div>
+            {orientation === 'horizontal' && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1.5 mt-1">
+                <Youtube className="w-3 h-3 text-red-400" />
+                Horizontal content → YouTube only
+              </p>
+            )}
+            {orientation === 'vertical' && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Vertical / Square → YouTube + Instagram + TikTok
+              </p>
+            )}
+          </div>
+
+          <Separator />
+
+          {/* Topic */}
           <div className="space-y-1.5">
             <Label className="text-xs">Video Topic / Description <span className="text-destructive">*</span></Label>
             <Input
@@ -158,6 +260,7 @@ export default function MetadataGenerator() {
             />
           </div>
 
+          {/* Tone */}
           <div className="space-y-1.5">
             <Label className="text-xs">Tone</Label>
             <div className="flex flex-wrap gap-2">
@@ -178,8 +281,9 @@ export default function MetadataGenerator() {
             </div>
           </div>
 
+          {/* Extra context */}
           <div className="space-y-1.5">
-            <Label className="text-xs">Extra Context (optional)</Label>
+            <Label className="text-xs">Extra Context <span className="text-muted-foreground">(optional)</span></Label>
             <Input
               placeholder="e.g. targeting Gen Z, product launch, fitness brand..."
               value={extraContext}
@@ -194,30 +298,33 @@ export default function MetadataGenerator() {
             <Button
               className="w-full h-11 font-bold"
               onClick={generateAll}
-              disabled={loading || !topic.trim() || !ollamaStatus?.running}
+              disabled={!canGenerate}
             >
               {loading ? (
-                <><RefreshCw className="w-4 h-4 animate-spin" /> Generating for {activePlatform}...</>
+                <><RefreshCw className="w-4 h-4 animate-spin" /> Generating for {activePlatform}…</>
               ) : (
-                <><Zap className="w-4 h-4" /> Generate for All Platforms</>
+                <><Zap className="w-4 h-4" /> Generate for All ({platforms.map(p => p.label).join(', ')})</>
               )}
             </Button>
-            <div className="grid grid-cols-2 gap-2">
-              {PLATFORMS.map(p => (
-                <Button
-                  key={p.id}
-                  variant="outline"
-                  onClick={() => generate(p.id)}
-                  disabled={loading || !topic.trim() || !ollamaStatus?.running}
-                  className="h-9 text-xs"
-                >
-                  {loading && activePlatform === p.id
-                    ? <RefreshCw className="w-3 h-3 animate-spin" />
-                    : <p.icon className="w-3.5 h-3.5" />
-                  }
-                  {p.label} Only
-                </Button>
-              ))}
+            <div className={cn("grid gap-2", platforms.length === 1 ? "grid-cols-1" : platforms.length === 2 ? "grid-cols-2" : "grid-cols-3")}>
+              {platforms.map(p => {
+                const PIcon = p.icon;
+                return (
+                  <Button
+                    key={p.id}
+                    variant="outline"
+                    onClick={() => generateOne(p.id)}
+                    disabled={!canGenerate}
+                    className="h-9 text-xs"
+                  >
+                    {loading && activePlatform === p.id
+                      ? <RefreshCw className="w-3 h-3 animate-spin" />
+                      : <PIcon className="w-3.5 h-3.5" />
+                    }
+                    {p.label}
+                  </Button>
+                );
+              })}
             </div>
           </div>
 
@@ -231,7 +338,7 @@ export default function MetadataGenerator() {
       </Card>
 
       {/* Results */}
-      {PLATFORMS.map(platform => {
+      {platforms.map(platform => {
         const metadata = results[platform.id];
         if (!metadata) return null;
         return (
@@ -242,8 +349,6 @@ export default function MetadataGenerator() {
             onCopyAll={() => copyToClipboard(formatForCopy(platform.id, metadata), `all-${platform.id}`)}
             copied={copied}
             onCopy={copyToClipboard}
-            expandedField={expandedField}
-            onToggleField={setExpandedField}
           />
         );
       })}
@@ -254,7 +359,6 @@ export default function MetadataGenerator() {
 // ─── Ollama Status Banner ─────────────────────────────────────────────────────
 function OllamaStatusBanner({ status, checking, onRecheck, selectedModel, onModelChange }) {
   const [showSetup, setShowSetup] = useState(false);
-
   if (!status) return null;
 
   if (status.running) {
@@ -264,6 +368,9 @@ function OllamaStatusBanner({ status, checking, onRecheck, selectedModel, onMode
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
             <span className="text-sm font-semibold text-green-400">Ollama Running</span>
+            {selectedModel && (
+              <Badge variant="secondary" className="text-xs mono">{selectedModel}</Badge>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {status.models?.length > 0 && (
@@ -282,7 +389,12 @@ function OllamaStatusBanner({ status, checking, onRecheck, selectedModel, onMode
         </div>
         {!status.hasLlama && (
           <p className="text-xs text-yellow-400 mt-2">
-            ⚠️ No Llama model found. Run: <code className="bg-secondary px-1 rounded">ollama pull llama2</code>
+            ⚠️ No Llama model found. Run: <code className="bg-secondary px-1 rounded">ollama pull llama3</code>
+          </p>
+        )}
+        {status.hasLlama && !status.models?.some(m => m.includes('llama3')) && (
+          <p className="text-xs text-yellow-400 mt-2">
+            ⚠️ Llama 3 not found — using {selectedModel}. For best results: <code className="bg-secondary px-1 rounded">ollama pull llama3</code>
           </p>
         )}
       </div>
@@ -300,7 +412,7 @@ function OllamaStatusBanner({ status, checking, onRecheck, selectedModel, onMode
           {checking ? <RefreshCw className="w-3 h-3 animate-spin" /> : 'Recheck'}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">Ollama must be running locally to use metadata generation.</p>
+      <p className="text-xs text-muted-foreground">Ollama must be running locally to generate metadata.</p>
       <button
         onClick={() => setShowSetup(!showSetup)}
         className="flex items-center gap-1 text-xs text-primary hover:underline"
@@ -312,7 +424,7 @@ function OllamaStatusBanner({ status, checking, onRecheck, selectedModel, onMode
         <div className="space-y-2 slide-up">
           <SetupStep step={1} label="Install Ollama" code="brew install ollama" />
           <SetupStep step={2} label="Start Ollama" code="ollama serve" />
-          <SetupStep step={3} label="Pull Llama 2 model" code="ollama pull llama2" note="~3.8GB download" />
+          <SetupStep step={3} label="Pull Llama 3 model" code="ollama pull llama3" note="~4.7GB download" />
           <SetupStep step={4} label="Recheck connection above" />
         </div>
       )}
@@ -350,9 +462,8 @@ function SetupStep({ step, label, code, note }) {
 }
 
 // ─── Platform Result Card ─────────────────────────────────────────────────────
-function PlatformResult({ platform, metadata, onCopyAll, copied, onCopy, expandedField, onToggleField }) {
+function PlatformResult({ platform, metadata, onCopyAll, copied, onCopy }) {
   const PlatformIcon = platform.icon;
-
   return (
     <Card className="slide-up overflow-hidden">
       <div className={`h-1 w-full bg-gradient-to-r ${platform.color}`} />
@@ -362,12 +473,7 @@ function PlatformResult({ platform, metadata, onCopyAll, copied, onCopy, expande
             <PlatformIcon className="w-4 h-4" />
             {platform.label} Metadata
           </CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onCopyAll}
-            className="h-7 text-xs gap-1"
-          >
+          <Button variant="outline" size="sm" onClick={onCopyAll} className="h-7 text-xs gap-1">
             {copied === `all-${platform.id}`
               ? <><Check className="w-3 h-3 text-green-400" /> Copied!</>
               : <><Copy className="w-3 h-3" /> Copy All</>
@@ -376,62 +482,38 @@ function PlatformResult({ platform, metadata, onCopyAll, copied, onCopy, expande
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {/* Title */}
         {metadata.title && (
-          <MetadataField
-            icon={Type}
-            label="Title"
-            value={metadata.title}
-            copyKey={`${platform.id}-title`}
-            copied={copied}
-            onCopy={onCopy}
-          />
+          <MetadataField icon={Type} label="Title" value={metadata.title}
+            copyKey={`${platform.id}-title`} copied={copied} onCopy={onCopy} />
         )}
-
-        {/* Caption / Description */}
         {(metadata.caption || metadata.description) && (
           <MetadataField
             icon={FileText}
-            label={platform.id === 'instagram' ? 'Caption' : 'Description'}
+            label={platform.id === 'youtube' ? 'Description' : 'Caption'}
             value={metadata.caption || metadata.description}
-            copyKey={`${platform.id}-desc`}
-            copied={copied}
-            onCopy={onCopy}
-            multiline
+            copyKey={`${platform.id}-desc`} copied={copied} onCopy={onCopy} multiline
           />
         )}
-
-        {/* Tags (YouTube) */}
-        {metadata.tags && metadata.tags.length > 0 && (
+        {metadata.tags?.length > 0 && (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
                 <Tag className="w-3 h-3" /> Tags
                 <Badge variant="secondary" className="text-xs">{metadata.tags.length}</Badge>
               </span>
-              <CopyButton
-                value={metadata.tags.join(', ')}
-                copyKey={`${platform.id}-tags`}
-                copied={copied}
-                onCopy={onCopy}
-              />
+              <CopyButton value={metadata.tags.join(', ')} copyKey={`${platform.id}-tags`} copied={copied} onCopy={onCopy} />
             </div>
             <div className="flex flex-wrap gap-1.5">
               {metadata.tags.map((tag, i) => (
-                <span
-                  key={i}
-                  onClick={() => onCopy(tag, `tag-${i}`)}
-                  className="cursor-pointer px-2 py-0.5 rounded bg-red-500/10 border border-red-500/20 text-red-300 text-xs hover:bg-red-500/20 transition-colors"
-                >
+                <span key={i} onClick={() => onCopy(tag, `tag-${platform.id}-${i}`)}
+                  className={cn("cursor-pointer px-2 py-0.5 rounded border text-xs transition-colors", platform.accentClasses.tag)}>
                   {tag}
                 </span>
               ))}
             </div>
           </div>
         )}
-
-        {/* Hashtags */}
-        {metadata.hashtags && metadata.hashtags.length > 0 && (
+        {metadata.hashtags?.length > 0 && (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
@@ -440,23 +522,15 @@ function PlatformResult({ platform, metadata, onCopyAll, copied, onCopy, expande
               </span>
               <CopyButton
                 value={metadata.hashtags.map(h => `#${h.replace(/^#/, '')}`).join(' ')}
-                copyKey={`${platform.id}-hashtags`}
-                copied={copied}
-                onCopy={onCopy}
+                copyKey={`${platform.id}-hashtags`} copied={copied} onCopy={onCopy}
               />
             </div>
             <div className="flex flex-wrap gap-1.5">
               {metadata.hashtags.map((tag, i) => {
                 const clean = `#${tag.replace(/^#/, '')}`;
-                const colorClass = platform.id === 'instagram'
-                  ? 'bg-pink-500/10 border-pink-500/20 text-pink-300 hover:bg-pink-500/20'
-                  : 'bg-red-500/10 border-red-500/20 text-red-300 hover:bg-red-500/20';
                 return (
-                  <span
-                    key={i}
-                    onClick={() => onCopy(clean, `htag-${platform.id}-${i}`)}
-                    className={cn("cursor-pointer px-2 py-0.5 rounded border text-xs transition-colors", colorClass)}
-                  >
+                  <span key={i} onClick={() => onCopy(clean, `htag-${platform.id}-${i}`)}
+                    className={cn("cursor-pointer px-2 py-0.5 rounded border text-xs transition-colors", platform.accentClasses.hashtag)}>
                     {clean}
                   </span>
                 );

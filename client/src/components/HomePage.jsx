@@ -2,9 +2,10 @@ import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import {
   Film, ImagePlus, Clock, RefreshCw,
   Repeat2, Sliders, ArrowRight, Download, X, Filter,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Sparkles, Info,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import VideoMetadataPanel from './VideoMetadataPanel';
 
 const API = 'http://localhost:5001';
 const isImage = (f) => /\.(jpe?g|png|webp|gif)$/i.test(f);
@@ -34,6 +35,7 @@ function inDateRange(dateStr, range) {
 export default function HomePage({ user, onNavigate }) {
   const [jobs, setJobs]       = useState([]);
   const [loading, setLoading] = useState(true);
+  const [detailJob, setDetailJob] = useState(null);
   const pollRef               = useRef(null);
 
   // ── Filters ────────────────────────────────────────────────────────────────
@@ -119,6 +121,9 @@ export default function HomePage({ user, onNavigate }) {
 
   return (
     <div className="space-y-8">
+      {detailJob && (
+        <JobDetailsModal job={detailJob} onClose={() => setDetailJob(null)} />
+      )}
       {/* Welcome header */}
       <div>
         <h2 className="text-2xl font-bold tracking-tight" style={{ fontFamily: 'Syne' }}>
@@ -261,7 +266,7 @@ export default function HomePage({ user, onNavigate }) {
                 className="card-in"
                 style={{ breakInside: 'avoid', marginBottom: '1rem', animationDelay: `${(activeJobs.length + i) * 40}ms` }}
               >
-                <JobCard job={job} onReplicate={handleReplicateHere} />
+                <JobCard job={job} onReplicate={handleReplicateHere} onDetails={setDetailJob} />
               </div>
             ))}
           </div>
@@ -387,7 +392,7 @@ function resolveAspect(job) {
 }
 
 // ── Job card ───────────────────────────────────────────────────────────────────
-function JobCard({ job, onReplicate }) {
+function JobCard({ job, onReplicate, onDetails }) {
   const files       = job.outputFiles?.length > 0 ? job.outputFiles : (job.outputFile ? [job.outputFile] : []);
   const count       = files.length;
   const aspectRatio = resolveAspect(job);
@@ -519,18 +524,146 @@ function JobCard({ job, onReplicate }) {
           </div>
         )}
 
-        {job.generationParams && (
+        <div className="flex gap-2">
+          {job.type !== 'post' && (
+            <button
+              onClick={() => onDetails(job)}
+              className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold h-8 rounded-md border border-border hover:border-primary/40 hover:text-primary transition-all text-muted-foreground"
+            >
+              <Info className="w-3.5 h-3.5" /> Details
+            </button>
+          )}
+          {job.generationParams && (
+            <button
+              onClick={handleReplicate}
+              disabled={replicating}
+              className={cn(
+                "flex items-center justify-center gap-1.5 text-xs font-semibold h-8 rounded-md border border-border hover:border-primary/40 hover:text-primary transition-all text-muted-foreground disabled:opacity-60",
+                job.type !== 'post' ? "flex-1" : "w-full"
+              )}
+            >
+              {replicating
+                ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Queuing…</>
+                : <><Repeat2 className="w-3.5 h-3.5" /> Replicate</>
+              }
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Job Details Modal ──────────────────────────────────────────────────────────
+function JobDetailsModal({ job, onClose }) {
+  const files = job.outputFiles?.length > 0 ? job.outputFiles : (job.outputFile ? [job.outputFile] : []);
+
+  // Close on Escape
+  React.useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm overflow-y-auto py-8 px-4">
+      <div className="w-full max-w-5xl bg-card border border-border rounded-2xl shadow-2xl overflow-hidden fade-in">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-secondary/30">
+          <div>
+            <h2 className="text-base font-bold mono">{job.batchName}</h2>
+            <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
+              <span>{new Date(job.createdAt).toLocaleString()}</span>
+              {job.resolution && <span className="font-mono border border-border rounded px-1.5 py-0.5">{job.resolution}</span>}
+              {job.presetName && (
+                <span className="flex items-center gap-1 text-primary/80">
+                  <Sliders className="w-2.5 h-2.5" />{job.presetName}
+                </span>
+              )}
+            </p>
+          </div>
           <button
-            onClick={handleReplicate}
-            disabled={replicating}
-            className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold h-8 rounded-md border border-border hover:border-primary/40 hover:text-primary transition-all text-muted-foreground disabled:opacity-60"
+            onClick={onClose}
+            className="w-8 h-8 rounded-lg border border-border hover:border-primary/40 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
           >
-            {replicating
-              ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Queuing…</>
-              : <><Repeat2 className="w-3.5 h-3.5" /> Replicate</>
-            }
+            <X className="w-4 h-4" />
           </button>
-        )}
+        </div>
+
+        {/* Video list */}
+        <div className="p-6 space-y-8">
+          {files.length === 0 && (
+            <p className="text-sm text-muted-foreground text-center py-8">No output files found.</p>
+          )}
+          {files.map((file, i) => {
+            const quote      = (job.videoQuotes || []).find(v => v.file === file)?.quote || '';
+            const metadata   = job.videoMetadata?.[file] || null;
+            const fileName   = file.split('/').pop();
+            const isImg      = isImage(file);
+
+            return (
+              <div key={file} className="space-y-4">
+                {files.length > 1 && (
+                  <div className="flex items-center gap-2">
+                    <div className="w-5 h-5 rounded-full bg-primary/20 text-primary text-xs flex items-center justify-center font-bold flex-shrink-0">
+                      {i + 1}
+                    </div>
+                    <span className="text-sm font-mono font-semibold">{fileName}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-[minmax(0,340px)_1fr] gap-5 items-start">
+                  {/* Left: video preview + download */}
+                  <div className="space-y-2">
+                    <div className="rounded-xl overflow-hidden bg-muted border border-border">
+                      {isImg ? (
+                        <img src={`${API}/outputs/${file}`} alt="" className="w-full h-auto block" />
+                      ) : (
+                        <video
+                          src={`${API}/outputs/${file}`}
+                          className="w-full h-auto block"
+                          preload="metadata"
+                          muted
+                          controls
+                        />
+                      )}
+                    </div>
+                    <a
+                      href={`${API}/outputs/${file}`}
+                      download={fileName}
+                      className="flex items-center justify-center gap-2 w-full h-9 rounded-lg bg-green-500/20 border border-green-500/40 text-green-400 text-xs font-semibold hover:bg-green-500/30 transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Download
+                    </a>
+                    {quote && (
+                      <div className="text-xs text-muted-foreground italic bg-secondary/50 border border-border rounded-lg px-3 py-2 leading-relaxed">
+                        <span className="not-italic font-semibold text-foreground block mb-0.5">Quote used:</span>
+                        "{quote}"
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right: metadata */}
+                  <div>
+                    <VideoMetadataPanel
+                      jobId={job.id}
+                      file={file}
+                      resolution={job.resolution}
+                      initialMetadata={metadata}
+                      initialQuote={quote}
+                      alwaysOpen
+                    />
+                  </div>
+                </div>
+
+                {i < files.length - 1 && (
+                  <div className="h-px bg-border mt-2" />
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

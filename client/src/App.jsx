@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Clapperboard, History, Zap, Sliders,
-  FolderOpen, ImagePlus, Home, LogOut, ChevronDown,
+  FolderOpen, ImagePlus, Home, LogOut, ChevronDown, Sparkles,
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
 import AuthPage from './components/AuthPage';
@@ -11,6 +11,7 @@ import GeneratePanel from './components/GeneratePanel';
 import JobHistory from './components/JobHistory';
 import PostsPanel from './components/PostsPanel';
 import PresetsPanel from './components/PresetsPanel';
+import MetadataGenerator from './components/MetadataGenerator';
 import Toast from './components/Toast';
 import { cn } from './lib/utils';
 
@@ -28,7 +29,7 @@ export default function App() {
   const [userMenuOpen, setUserMenuOpen]             = useState(false);
 
   // ── Hash-based tab routing so browser Back/Forward works ──────────────────
-  const VALID_TABS = ['home','generate','posts','batches','presets','history'];
+  const VALID_TABS = ['home','generate','posts','metadata','batches','presets','history'];
   const getTabFromHash = () => {
     const hash = window.location.hash.replace('#', '');
     return VALID_TABS.includes(hash) ? hash : 'home';
@@ -42,7 +43,11 @@ export default function App() {
   }, [activeTab]);
 
   useEffect(() => {
-    const onHashChange = () => setActiveTabState(getTabFromHash());
+    const onHashChange = () => {
+      const tab = getTabFromHash();
+      if (tab === 'batches') setSelectedBatch(null);
+      setActiveTabState(tab);
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -120,6 +125,7 @@ export default function App() {
     { id: 'home',     icon: <Home className="w-3.5 h-3.5" />,      label: 'Home' },
     { id: 'generate', icon: <Zap className="w-3.5 h-3.5" />,       label: 'Video' },
     { id: 'posts',    icon: <ImagePlus className="w-3.5 h-3.5" />,  label: 'Posts' },
+    { id: 'metadata', icon: <Sparkles className="w-3.5 h-3.5" />,  label: 'Metadata' },
   ];
 
   // ── Utility tabs (right nav group)
@@ -229,6 +235,8 @@ export default function App() {
             <SectionHeader icon={<Zap className="w-4 h-4 text-primary" />} label="Video Generation" />
             <GeneratePanel
               selectedBatch={selectedBatch}
+              onSelectBatch={setSelectedBatch}
+              batches={batches}
               fileRefreshTrigger={fileRefreshTrigger}
               activePreset={activePreset}
               onPresetUpdated={handlePresetUpdated}
@@ -236,7 +244,6 @@ export default function App() {
               onJobComplete={handleJobComplete}
               presets={presets}
               onApplyPreset={handleApplyPreset}
-              onOpenBatches={() => setActiveTab('batches')}
             />
           </div>
         )}
@@ -246,10 +253,16 @@ export default function App() {
             <SectionHeader icon={<ImagePlus className="w-4 h-4 text-primary" />} label="Posts" />
             <PostsPanel
               batches={batches}
-              onOpenBatches={() => setActiveTab('batches')}
               incomingPreset={activePreset?.presetType === 'post' ? activePreset : null}
               onClearIncomingPreset={() => setActivePreset(null)}
             />
+          </div>
+        )}
+
+        {activeTab === 'metadata' && (
+          <div className="max-w-2xl mx-auto">
+            <SectionHeader icon={<Sparkles className="w-4 h-4 text-primary" />} label="Metadata" />
+            <MetadataGenerator />
           </div>
         )}
 
