@@ -8,7 +8,7 @@ import LayoutEditor from './LayoutEditor';
 import {
   Clapperboard, Play, Pause, Upload, RefreshCw, Check, AlertCircle,
   Download, Trash2, Music, Monitor, FileText, Sliders, Lock, X, Type, Sparkles,
-  Film, Image, Volume2, VolumeX, Scissors, LayoutGrid, List, Eye, Hash,
+  Film, Image, Volume2, VolumeX, Scissors, LayoutGrid, List, Eye, Hash, StopCircle,
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -56,7 +56,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
   const [batchFiles, setBatchFiles]             = useState({ videos: [], images: [] });
   const [selectedVideos, setSelectedVideos]     = useState([]);
   const [selectedImages, setSelectedImages]     = useState([]);
-  const [fileViewMode, setFileViewMode]         = useState('list'); // 'list' | 'grid'
+  const [fileViewMode, setFileViewMode]         = useState('grid'); // 'list' | 'grid'
   const [fileLightboxSrc, setFileLightboxSrc]   = useState(null);
   const [showBatchPicker, setShowBatchPicker]   = useState(false);
   const [logoFile, setLogoFile]                 = useState(null);
@@ -1374,9 +1374,17 @@ function FileToggle({ name, selected, onToggle, color }) {
 
 function JobStatus({ job }) {
   const [lightboxSrc, setLightboxSrc] = useState(null);
-  const statusColors = { queued: 'status-queued', running: 'status-running', done: 'status-done', error: 'status-error' };
+  const [aborting, setAborting] = useState(false);
+  const statusColors = { queued: 'status-queued', running: 'status-running', done: 'status-done', error: 'status-error', cancelled: 'status-error' };
   const multiFile = job.status === 'done' && job.outputFiles?.length > 1;
   const singleFile = job.status === 'done' && job.outputFile && !multiFile;
+  const canAbort = job.status === 'queued' || job.status === 'running';
+
+  const abort = async () => {
+    setAborting(true);
+    try { await fetch(`${API}/api/jobs/${job.id}/abort`, { method: 'POST' }); } catch {}
+    setAborting(false);
+  };
 
   return (
     <>
@@ -1384,17 +1392,30 @@ function JobStatus({ job }) {
       <CardContent className="pt-4 space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {job.status === 'running' && <RefreshCw className="w-3.5 h-3.5 text-blue-400 animate-spin" />}
-            {job.status === 'done'    && <Check className="w-3.5 h-3.5 text-green-400" />}
-            {job.status === 'error'   && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
+            {job.status === 'running'   && <RefreshCw className="w-3.5 h-3.5 text-blue-400 animate-spin" />}
+            {job.status === 'queued'    && <RefreshCw className="w-3.5 h-3.5 text-muted-foreground" />}
+            {job.status === 'done'      && <Check className="w-3.5 h-3.5 text-green-400" />}
+            {job.status === 'error'     && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
+            {job.status === 'cancelled' && <StopCircle className="w-3.5 h-3.5 text-red-400" />}
             <span className="text-sm font-semibold">Job {job.id.slice(0, 8)}...</span>
             {job.resolution && (
               <Badge variant="secondary" className="text-xs mono">{job.resolution}</Badge>
             )}
           </div>
-          <span className={cn("text-xs px-2 py-0.5 rounded-full font-semibold", statusColors[job.status])}>
-            {job.status.toUpperCase()}
-          </span>
+          <div className="flex items-center gap-2">
+            {canAbort && (
+              <button
+                onClick={abort}
+                disabled={aborting}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-red-400 border border-border hover:border-red-500/40 rounded px-1.5 py-0.5 transition-colors"
+              >
+                <StopCircle className="w-3 h-3" /> {aborting ? 'Aborting…' : 'Abort'}
+              </button>
+            )}
+            <span className={cn("text-xs px-2 py-0.5 rounded-full font-semibold", statusColors[job.status])}>
+              {job.status.toUpperCase()}
+            </span>
+          </div>
         </div>
 
         {(job.status === 'running' || job.status === 'done') && <Progress value={job.progress} className="h-1.5" />}

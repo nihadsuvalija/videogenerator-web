@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ImagePlus, Play, RefreshCw, Check, AlertCircle, Download,
   Lock, Sliders, X, FileText,
-  Image, Trash2, Upload, Hash, Type, Sparkles, LayoutGrid, List, Eye,
+  Image, Trash2, Upload, Hash, Type, Sparkles, LayoutGrid, List, Eye, StopCircle,
 } from 'lucide-react';
 import FontPicker from './FontPicker';
 import { Button } from './ui-button';
@@ -36,14 +36,13 @@ const DEFAULT_POST_LAYOUT = {
   dimBackground: 0,
 };
 
-export default function PostsPanel({ batches, incomingPreset, onClearIncomingPreset }) {
-  const [presets, setPresets]           = useState([]);
+export default function PostsPanel({ batches, incomingPreset, onClearIncomingPreset, presets = [], onPresetsChanged }) {
   const [activePreset, setActivePreset] = useState(null);
 
   const [selectedBatch, setSelectedBatch]   = useState(null);
   const [batchFiles, setBatchFiles]         = useState({ videos: [], images: [] });
   const [selectedImages, setSelectedImages] = useState([]);
-  const [fileViewMode, setFileViewMode]       = useState('list');
+  const [fileViewMode, setFileViewMode]       = useState('grid');
   const [fileLightboxSrc, setFileLightboxSrc] = useState(null);
   const [showBatchPicker, setShowBatchPicker] = useState(false);
 
@@ -67,9 +66,6 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
   const pollRef = useRef();
   const saveRef = useRef();
 
-  useEffect(() => {
-    fetch(`${API}/api/presets?type=post`).then(r => r.json()).then(setPresets).catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (!selectedBatch) return;
@@ -407,7 +403,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                           const res = await fetch(`${API}/api/presets/${p.id}`);
                           const fresh = await res.json();
                           applyPreset(fresh);
-                          setPresets(prev => prev.map(pr => pr.id === fresh.id ? fresh : pr));
+                          onPresetsChanged?.();
                         } catch { applyPreset(p); }
                       }}
                       className={cn("flex items-center justify-between px-3 py-2.5 rounded-lg border text-left text-sm transition-all",
@@ -650,7 +646,15 @@ function PostImageGridCell({ name, src, selected, onToggle, onPreview }) {
 // ── Job status for post generation ────────────────────────────────────────────
 function PostJobStatus({ job }) {
   const [lightboxSrc, setLightboxSrc] = useState(null);
-  const statusColors = { queued: 'status-queued', running: 'status-running', done: 'status-done', error: 'status-error' };
+  const [aborting, setAborting] = useState(false);
+  const statusColors = { queued: 'status-queued', running: 'status-running', done: 'status-done', error: 'status-error', cancelled: 'status-error' };
+  const canAbort = job.status === 'queued' || job.status === 'running';
+
+  const abort = async () => {
+    setAborting(true);
+    try { await fetch(`${API}/api/jobs/${job.id}/abort`, { method: 'POST' }); } catch {}
+    setAborting(false);
+  };
 
   return (
     <>
@@ -658,15 +662,28 @@ function PostJobStatus({ job }) {
         <CardContent className="pt-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              {job.status === 'running'  && <RefreshCw className="w-3.5 h-3.5 text-blue-400 animate-spin" />}
-              {job.status === 'done'     && <Check className="w-3.5 h-3.5 text-green-400" />}
-              {job.status === 'error'    && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
+              {job.status === 'running'   && <RefreshCw className="w-3.5 h-3.5 text-blue-400 animate-spin" />}
+              {job.status === 'queued'    && <RefreshCw className="w-3.5 h-3.5 text-muted-foreground" />}
+              {job.status === 'done'      && <Check className="w-3.5 h-3.5 text-green-400" />}
+              {job.status === 'error'     && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
+              {job.status === 'cancelled' && <StopCircle className="w-3.5 h-3.5 text-red-400" />}
               <span className="text-sm font-semibold">Job {job.id?.slice(0, 8)}…</span>
               {job.resolution && <Badge variant="secondary" className="text-xs mono">{job.resolution}</Badge>}
             </div>
-            <span className={cn("text-xs px-2 py-0.5 rounded-full font-semibold", statusColors[job.status])}>
-              {job.status?.toUpperCase()}
-            </span>
+            <div className="flex items-center gap-2">
+              {canAbort && (
+                <button
+                  onClick={abort}
+                  disabled={aborting}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-red-400 border border-border hover:border-red-500/40 rounded px-1.5 py-0.5 transition-colors"
+                >
+                  <StopCircle className="w-3 h-3" /> {aborting ? 'Aborting…' : 'Abort'}
+                </button>
+              )}
+              <span className={cn("text-xs px-2 py-0.5 rounded-full font-semibold", statusColors[job.status])}>
+                {job.status?.toUpperCase()}
+              </span>
+            </div>
           </div>
 
           {(job.status === 'running' || job.status === 'done') && (

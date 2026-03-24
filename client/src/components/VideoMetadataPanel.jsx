@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Sparkles, RefreshCw, Copy, Check, Hash, Tag, FileText, Type,
-  AlertCircle, Youtube, ChevronDown, ChevronUp,
+  AlertCircle, Youtube, ChevronDown, ChevronUp, StopCircle,
 } from 'lucide-react';
 import { Badge } from './ui-primitives';
 import { cn } from '../lib/utils';
@@ -68,8 +68,12 @@ export default function VideoMetadataPanel({ jobId, file, resolution, initialMet
   const [error, setError]     = useState(null);
   const [copied, setCopied]   = useState(null);
   const [showTone, setShowTone] = useState(false);
+  const abortCtrlRef = useRef(null);
 
   const generate = async () => {
+    if (abortCtrlRef.current) abortCtrlRef.current.abort();
+    const ctrl = new AbortController();
+    abortCtrlRef.current = ctrl;
     setLoading(true);
     setError(null);
     try {
@@ -77,6 +81,7 @@ export default function VideoMetadataPanel({ jobId, file, resolution, initialMet
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ file, tone }),
+        signal: ctrl.signal,
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -84,10 +89,16 @@ export default function VideoMetadataPanel({ jobId, file, resolution, initialMet
       setPlatforms(data.platforms);
       setQuote(data.quote || '');
     } catch (e) {
-      setError(e.message);
+      if (e.name !== 'AbortError') setError(e.message);
     } finally {
+      abortCtrlRef.current = null;
       setLoading(false);
     }
+  };
+
+  const cancelGenerate = () => {
+    if (abortCtrlRef.current) { abortCtrlRef.current.abort(); abortCtrlRef.current = null; }
+    setLoading(false);
   };
 
   const handleOpen = () => {
@@ -154,15 +165,22 @@ export default function VideoMetadataPanel({ jobId, file, resolution, initialMet
           >
             {tone.split(' ')[0]}
           </button>
-          {/* Regenerate */}
-          <button
-            onClick={generate}
-            disabled={loading}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors border border-border rounded px-1.5 py-0.5"
-          >
-            <RefreshCw className={cn("w-3 h-3", loading && "animate-spin")} />
-            {loading ? 'Generating…' : 'Regenerate'}
-          </button>
+          {/* Cancel / Regenerate */}
+          {loading ? (
+            <button
+              onClick={cancelGenerate}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-red-400 border border-border hover:border-red-500/40 rounded px-1.5 py-0.5 transition-colors"
+            >
+              <StopCircle className="w-3 h-3" /> Cancel
+            </button>
+          ) : (
+            <button
+              onClick={generate}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors border border-border rounded px-1.5 py-0.5"
+            >
+              <RefreshCw className="w-3 h-3" /> Regenerate
+            </button>
+          )}
           {!alwaysOpen && (
             <button onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground transition-colors ml-1">
               <ChevronUp className="w-3.5 h-3.5" />

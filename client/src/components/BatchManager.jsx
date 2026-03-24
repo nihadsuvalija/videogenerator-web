@@ -19,7 +19,7 @@ export default function BatchManager({ batches, onRefresh, onSelectBatch, select
   const [dragOver, setDragOver]         = useState(null);
   const [batchFiles, setBatchFiles]     = useState({ videos: [], images: [] });
   const [loadingFiles, setLoadingFiles] = useState(false);
-  const [viewMode, setViewMode]         = useState('list'); // 'list' | 'grid'
+  const [viewMode, setViewMode]         = useState('grid'); // 'list' | 'grid'
   const [lightboxSrc, setLightboxSrc]   = useState(null);
   const videoInputRef = useRef();
   const imageInputRef = useRef();

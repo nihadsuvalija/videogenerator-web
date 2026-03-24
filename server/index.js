@@ -100,7 +100,7 @@ mongoose.connect(MONGO_URI)
 const JobSchema = new mongoose.Schema({
   id:          { type: String, default: uuidv4 },
   batchName:   String,
-  status:      { type: String, enum: ['queued','running','done','error'], default: 'queued' },
+  status:      { type: String, enum: ['queued','running','done','error','cancelled'], default: 'queued' },
   progress:    { type: Number, default: 0 },
   log:         [String],
   outputFile:  String,
@@ -811,6 +811,10 @@ async function runGeneration(job, opts) {
   const quoteLines = (quotes || '').split('\n').map(q => q.trim()).filter(Boolean);
   const batchDir = path.join(BATCHES_DIR, batchName);
 
+  const abortCtrl = new AbortController();
+  const signal    = abortCtrl.signal;
+  activeJobControllers.set(job.id, abortCtrl);
+
   const addLog = async (msg) => {
     console.log(`[${job.id}] ${msg}`);
     await Job.updateOne({ id: job.id }, { $push: { log: msg } });
@@ -1115,7 +1119,7 @@ async function runGeneration(job, opts) {
                   '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
                   '-an',
                   '-y', out
-                ]);
+                ], signal);
                 const actualDur = await getVideoDuration(out).catch(() => 0);
                 if (actualDur < 0.1) {
                   await addLog(`  WARNING: slice ${sliceIndex + 1} produced empty output (${actualDur.toFixed(2)}s), skipping`);
@@ -1216,7 +1220,7 @@ async function runGeneration(job, opts) {
             '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
             '-an',
             '-y', slideshowOut
-          ]);
+          ], signal);
           parts.push(slideshowOut);
           await localSetStatus(75);
           await addLog('Slideshow segment created.');
@@ -1234,7 +1238,7 @@ async function runGeneration(job, opts) {
         } else {
           const listFile = path.join(localTmpDir, 'concat_list.txt');
           fs.writeFileSync(listFile, parts.map(p => `file '${p}'`).join('\n'));
-          await ffmpegRun(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', silentOut]);
+          await ffmpegRun(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', silentOut], signal);
         }
 
         // ── Step 4: Mix audio ─────────────────────────────────────────────────
@@ -1269,17 +1273,17 @@ async function runGeneration(job, opts) {
             ...(audioFilters.length > 0 ? ['-af', audioFilters.join(',')] : []),
             ...limitArgs,
             '-y', muxTarget
-          ]);
+          ], signal);
         } else {
           const trimArgs = preferredDuration > 0 ? ['-t', String(preferredDuration)] : [];
           if (trimArgs.length > 0) {
-            await ffmpegRun(['-i', silentOut, ...trimArgs, '-c', 'copy', '-y', preSubsPath]);
+            await ffmpegRun(['-i', silentOut, ...trimArgs, '-c', 'copy', '-y', preSubsPath], signal);
           } else {
             fs.copyFileSync(silentOut, preSubsPath);
           }
           if (!assPath) {
             if (trimArgs.length > 0) {
-              await ffmpegRun(['-i', silentOut, ...trimArgs, '-c', 'copy', '-y', outputPath]);
+              await ffmpegRun(['-i', silentOut, ...trimArgs, '-c', 'copy', '-y', outputPath], signal);
             } else {
               fs.copyFileSync(silentOut, outputPath);
             }
@@ -1298,7 +1302,7 @@ async function runGeneration(job, opts) {
             '-c:a', 'copy',
             ...(preferredDuration > 0 ? ['-t', String(preferredDuration)] : []),
             '-y', outputPath
-          ]);
+          ], signal);
         }
 
         // Clip metadata (for the editor — only meaningful for single-video jobs)
@@ -1354,15 +1358,25 @@ async function runGeneration(job, opts) {
       : `Done! Output: ${allOutputFiles[0]}`);
 
   } catch (err) {
-    await addLog(`ERROR: ${err.message}`);
-    await setStatus('error', 0);
+    if (signal.aborted) {
+      await setStatus('cancelled', 0);
+    } else {
+      await addLog(`ERROR: ${err.message}`);
+      await setStatus('error', 0);
+    }
     // tmpDirs are cleaned up in per-video finally blocks
+  } finally {
+    activeJobControllers.delete(job.id);
   }
 }
 
 // ─── Post Generation ──────────────────────────────────────────────────────────
 async function runPostGeneration(job, opts) {
   const { batchName, imageFiles, quotes, postCount, resolution, textMaxChars, layout, presetId, fontFamily = 'default', fontSize = null, presetLogoFile = null } = opts;
+
+  const abortCtrl = new AbortController();
+  const signal    = abortCtrl.signal;
+  activeJobControllers.set(job.id, abortCtrl);
 
   const addLog = async (msg) => {
     console.log(`[${job.id}] ${msg}`);
@@ -1473,8 +1487,9 @@ async function runPostGeneration(job, opts) {
     const folderPath = path.join(OUTPUT_DIR, folderName);
     fs.mkdirSync(folderPath, { recursive: true });
 
-    const maxChars     = Number(textMaxChars) || 25;
-    const outputImages = [];
+    const maxChars      = Number(textMaxChars) || 25;
+    const outputImages  = [];
+    const postQuoteLog  = []; // track quote per output file for metadata
 
     for (let i = 0; i < count; i++) {
       const imgPath = path.join(iDir, availableImages[i]);
@@ -1558,8 +1573,10 @@ async function runPostGeneration(job, opts) {
           '-frames:v', '1',
           '-q:v', '3',
           '-y', outPath,
-        ]);
-        outputImages.push(`${folderName}/${outFile}`);
+        ], signal);
+        const storedName = `${folderName}/${outFile}`;
+        outputImages.push(storedName);
+        if (quote) postQuoteLog.push({ file: storedName, quote });
         const preview = quote ? ` — "${quote.slice(0, 45)}${quote.length > 45 ? '…' : ''}"` : '';
         await addLog(`Post ${i + 1}/${count}: ${availableImages[i]}${preview}`);
       } catch (err) {
@@ -1577,12 +1594,19 @@ async function runPostGeneration(job, opts) {
       outputFiles:  outputImages,
       outputFolder: folderName,
       type:         'post',
+      videoQuotes:  postQuoteLog,
     }});
     await addLog(`Done! ${outputImages.length} post${outputImages.length !== 1 ? 's' : ''} saved to: ${folderName}`);
 
   } catch (err) {
-    await addLog(`ERROR: ${err.message}`);
-    await setStatus('error', 0);
+    if (signal.aborted) {
+      await setStatus('cancelled', 0);
+    } else {
+      await addLog(`ERROR: ${err.message}`);
+      await setStatus('error', 0);
+    }
+  } finally {
+    activeJobControllers.delete(job.id);
   }
 }
 
@@ -1702,15 +1726,29 @@ function getVideoDuration(filePath) {
   });
 }
 
-function ffmpegRun(args) {
+// ─── Active job abort controllers ────────────────────────────────────────────
+const activeJobControllers = new Map(); // jobId → AbortController
+
+app.post('/api/jobs/:id/abort', async (req, res) => {
+  const ctrl = activeJobControllers.get(req.params.id);
+  if (ctrl) ctrl.abort();
+  await Job.updateOne({ id: req.params.id, status: { $in: ['queued', 'running'] } }, { status: 'cancelled', progress: 0 });
+  res.json({ ok: true });
+});
+
+function ffmpegRun(args, signal) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error('Job cancelled'));
     console.log('ffmpeg', args.join(' '));
     const proc = spawn('ffmpeg', args);
     let errOut = '';
+    const onAbort = () => { proc.kill('SIGKILL'); reject(new Error('Job cancelled')); };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
     proc.stderr.on('data', d => { errOut += d.toString(); });
     proc.on('close', code => {
-      if (code !== 0) reject(new Error(`ffmpeg exited ${code}: ${errOut.slice(-600)}`));
-      else resolve();
+      if (signal) signal.removeEventListener('abort', onAbort);
+      if (code !== 0 && !signal?.aborted) reject(new Error(`ffmpeg exited ${code}: ${errOut.slice(-600)}`));
+      else if (!signal?.aborted) resolve();
     });
     proc.on('error', err => reject(new Error(`ffmpeg not found: ${err.message}`)));
   });
@@ -1930,10 +1968,12 @@ app.post('/api/jobs/:id/metadata/generate', async (req, res) => {
     }
   } catch {}
 
-  const toneStr = tone || 'Engaging & Casual';
+  const toneStr   = tone || 'Engaging & Casual';
+  const isPost    = job.type === 'post';
+  const mediaType = isPost ? 'social media image post' : 'video';
   const platformPrompts = {
     youtube: `You are a YouTube SEO and content expert.
-Generate YouTube video metadata for a video with this caption/quote: "${quote}"
+Generate YouTube metadata for a ${mediaType} with this caption/quote: "${quote}"
 Tone: ${toneStr}
 Respond ONLY with valid JSON in this exact format, no other text:
 {
@@ -1942,8 +1982,8 @@ Respond ONLY with valid JSON in this exact format, no other text:
   "tags": ["tag1","tag2","tag3","tag4","tag5","tag6","tag7","tag8","tag9","tag10"],
   "hashtags": ["hashtag1","hashtag2","hashtag3"]
 }`,
-    instagram: `You are an Instagram Reels expert.
-Generate Instagram metadata for a short vertical video with this caption/quote: "${quote}"
+    instagram: `You are an Instagram content expert.
+Generate Instagram metadata for a ${mediaType} with this caption/quote: "${quote}"
 Tone: ${toneStr}
 Respond ONLY with valid JSON in this exact format, no other text:
 {
@@ -1952,7 +1992,7 @@ Respond ONLY with valid JSON in this exact format, no other text:
   "hashtags": ["hashtag1","hashtag2","hashtag3","hashtag4","hashtag5","hashtag6","hashtag7","hashtag8","hashtag9","hashtag10","hashtag11","hashtag12","hashtag13","hashtag14","hashtag15"]
 }`,
     tiktok: `You are a TikTok content strategist.
-Generate TikTok metadata for a short vertical video with this caption/quote: "${quote}"
+Generate TikTok metadata for a ${mediaType} with this caption/quote: "${quote}"
 Tone: ${toneStr}
 Respond ONLY with valid JSON in this exact format, no other text:
 {

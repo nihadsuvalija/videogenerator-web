@@ -38,7 +38,7 @@ function inDateRange(dateStr, range) {
   return now - d <= ms;
 }
 
-export default function HomePage({ user, onNavigate }) {
+export default function HomePage({ user, onNavigate, refreshTrigger }) {
   const [jobs, setJobs]       = useState([]);
   const [loading, setLoading] = useState(true);
   const [detailJob, setDetailJob] = useState(null);
@@ -61,15 +61,18 @@ export default function HomePage({ user, onNavigate }) {
 
   useEffect(() => { loadJobs(); }, [loadJobs]);
 
+  // Refresh immediately when a job completes (triggered from App)
+  useEffect(() => { if (refreshTrigger) loadJobs(); }, [refreshTrigger]); // eslint-disable-line
+
   // Split into active (queued/running) and done
   const activeJobs = useMemo(() => jobs.filter(j => j.status === 'queued' || j.status === 'running'), [jobs]);
   const doneJobs   = useMemo(() => jobs.filter(j => j.status === 'done'), [jobs]);
 
-  // Poll while jobs are active
+  // Poll every 3s when active jobs are known; always poll every 8s to catch externally started jobs
   useEffect(() => {
     clearInterval(pollRef.current);
-    if (activeJobs.length === 0) return;
-    pollRef.current = setInterval(loadJobs, 2000);
+    const interval = activeJobs.length > 0 ? 3000 : 8000;
+    pollRef.current = setInterval(loadJobs, interval);
     return () => clearInterval(pollRef.current);
   }, [activeJobs.length, loadJobs]);
 
@@ -570,22 +573,17 @@ function JobCard({ job, onReplicate, onDetails }) {
         )}
 
         <div className="flex gap-2">
-          {job.type !== 'post' && (
-            <button
-              onClick={() => onDetails(job)}
-              className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold h-8 rounded-md border border-border hover:border-primary/40 hover:text-primary transition-all text-muted-foreground"
-            >
-              <Info className="w-3.5 h-3.5" /> Details
-            </button>
-          )}
+          <button
+            onClick={() => onDetails(job)}
+            className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold h-8 rounded-md border border-border hover:border-primary/40 hover:text-primary transition-all text-muted-foreground"
+          >
+            <Info className="w-3.5 h-3.5" /> Details
+          </button>
           {job.generationParams && (
             <button
               onClick={handleReplicate}
               disabled={replicating}
-              className={cn(
-                "flex items-center justify-center gap-1.5 text-xs font-semibold h-8 rounded-md border border-border hover:border-primary/40 hover:text-primary transition-all text-muted-foreground disabled:opacity-60",
-                job.type !== 'post' ? "flex-1" : "w-full"
-              )}
+              className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold h-8 rounded-md border border-border hover:border-primary/40 hover:text-primary transition-all text-muted-foreground disabled:opacity-60"
             >
               {replicating
                 ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Queuing…</>
@@ -622,7 +620,15 @@ function JobDetailsModal({ job, onClose }) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-secondary/30 flex-shrink-0">
           <div>
-            <h2 className="text-base font-bold mono">{job.batchName}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold mono">{job.batchName}</h2>
+              <span className={cn(
+                "text-xs font-semibold px-2 py-0.5 rounded-full",
+                job.type === 'post' ? "bg-purple-500/20 text-purple-300 border border-purple-500/30" : "bg-primary/20 text-primary border border-primary/30"
+              )}>
+                {job.type === 'post' ? 'Post' : 'Video'}
+              </span>
+            </div>
             <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
               <span>{new Date(job.createdAt).toLocaleString()}</span>
               {job.resolution && <span className="font-mono border border-border rounded px-1.5 py-0.5">{job.resolution}</span>}

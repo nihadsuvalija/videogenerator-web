@@ -25,7 +25,9 @@ export default function App() {
   const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
   const [activePreset, setActivePreset]             = useState(null);
   const [presets, setPresets]                       = useState([]);
+  const [postPresets, setPostPresets]               = useState([]);
   const [toasts, setToasts]                         = useState([]);
+  const [homeRefresh, setHomeRefresh]               = useState(0);
   const [userMenuOpen, setUserMenuOpen]             = useState(false);
   const tabRefs                                     = useRef({});
 
@@ -98,6 +100,7 @@ export default function App() {
         id, type: 'error', title: 'Generation failed', message: job.batchName,
       }]);
     }
+    setHomeRefresh(n => n + 1);
   }, []);
 
   const dismissToast = useCallback((id) => {
@@ -106,8 +109,12 @@ export default function App() {
 
   const loadPresets = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/presets?type=video`);
-      setPresets(await res.json());
+      const [vRes, pRes] = await Promise.all([
+        fetch(`${API}/api/presets?type=video`),
+        fetch(`${API}/api/presets?type=post`),
+      ]);
+      setPresets(await vRes.json());
+      setPostPresets(await pRes.json());
     } catch {}
   }, []);
 
@@ -243,7 +250,7 @@ export default function App() {
       <main className="max-w-[1920px] mx-auto px-6 py-8">
 
         <div ref={el => tabRefs.current['home'] = el} style={{ display: activeTab === 'home' ? '' : 'none' }}>
-          <HomePage user={user} onNavigate={setActiveTab} />
+          <HomePage user={user} onNavigate={setActiveTab} refreshTrigger={homeRefresh} />
         </div>
 
         <div ref={el => tabRefs.current['generate'] = el} style={{ display: activeTab === 'generate' ? '' : 'none' }}>
@@ -268,6 +275,8 @@ export default function App() {
             batches={batches}
             incomingPreset={activePreset?.presetType === 'post' ? activePreset : null}
             onClearIncomingPreset={() => setActivePreset(null)}
+            presets={postPresets}
+            onPresetsChanged={loadPresets}
           />
         </div>
 
