@@ -283,7 +283,7 @@ export default function HomePage({ user, onNavigate }) {
             )
         ) : (
           <>
-            <div style={{ columns: '260px 3', columnGap: '1rem' }}>
+            <div style={{ columns: '260px 4', columnGap: '1rem' }}>
               {/* Active / loading cards first */}
               {activeJobs.map((job, i) => (
                 <div key={job.id} className="card-in" style={{ breakInside: 'avoid', marginBottom: '1rem', animationDelay: `${i * 40}ms` }}>

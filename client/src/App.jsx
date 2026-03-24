@@ -161,7 +161,7 @@ export default function App() {
 
       {/* ── Header ── */}
       <header className="border-b border-border sticky top-0 z-50 bg-background/80 backdrop-blur-md [will-change:transform]">
-        <div className="max-w-7xl mx-auto px-6 h-14 flex items-center gap-4">
+        <div className="max-w-[1920px] mx-auto px-6 h-14 flex items-center gap-4">
 
           {/* Logo */}
           <div className="flex items-center gap-2.5 flex-shrink-0">
@@ -240,50 +240,46 @@ export default function App() {
       )}
 
       {/* ── Main content ── */}
-      <main className="max-w-7xl mx-auto px-6 py-8">
+      <main className="max-w-[1920px] mx-auto px-6 py-8">
 
         <div ref={el => tabRefs.current['home'] = el} style={{ display: activeTab === 'home' ? '' : 'none' }}>
           <HomePage user={user} onNavigate={setActiveTab} />
         </div>
 
         <div ref={el => tabRefs.current['generate'] = el} style={{ display: activeTab === 'generate' ? '' : 'none' }}>
-          <div className="max-w-7xl mx-auto">
-            <SectionHeader icon={<Zap className="w-4 h-4 text-primary" />} label="Video Generation" />
-            <GeneratePanel
-              selectedBatch={selectedBatch}
-              onSelectBatch={setSelectedBatch}
-              batches={batches}
-              fileRefreshTrigger={fileRefreshTrigger}
-              activePreset={activePreset}
-              onPresetUpdated={handlePresetUpdated}
-              onClearPreset={() => setActivePreset(null)}
-              onJobComplete={handleJobComplete}
-              presets={presets}
-              onApplyPreset={handleApplyPreset}
-            />
-          </div>
+          <SectionHeader icon={<Zap className="w-4 h-4 text-primary" />} label="Video Generation" />
+          <GeneratePanel
+            selectedBatch={selectedBatch}
+            onSelectBatch={setSelectedBatch}
+            batches={batches}
+            fileRefreshTrigger={fileRefreshTrigger}
+            activePreset={activePreset}
+            onPresetUpdated={handlePresetUpdated}
+            onClearPreset={() => setActivePreset(null)}
+            onJobComplete={handleJobComplete}
+            presets={presets}
+            onApplyPreset={handleApplyPreset}
+          />
         </div>
 
         <div ref={el => tabRefs.current['posts'] = el} style={{ display: activeTab === 'posts' ? '' : 'none' }}>
-          <div className="max-w-7xl mx-auto">
-            <SectionHeader icon={<ImagePlus className="w-4 h-4 text-primary" />} label="Posts" />
-            <PostsPanel
-              batches={batches}
-              incomingPreset={activePreset?.presetType === 'post' ? activePreset : null}
-              onClearIncomingPreset={() => setActivePreset(null)}
-            />
-          </div>
+          <SectionHeader icon={<ImagePlus className="w-4 h-4 text-primary" />} label="Posts" />
+          <PostsPanel
+            batches={batches}
+            incomingPreset={activePreset?.presetType === 'post' ? activePreset : null}
+            onClearIncomingPreset={() => setActivePreset(null)}
+          />
         </div>
 
         <div ref={el => tabRefs.current['metadata'] = el} style={{ display: activeTab === 'metadata' ? '' : 'none' }}>
-          <div className="max-w-2xl mx-auto">
+          <div className="max-w-4xl mx-auto">
             <SectionHeader icon={<Sparkles className="w-4 h-4 text-primary" />} label="Metadata" />
             <MetadataGenerator />
           </div>
         </div>
 
         <div ref={el => tabRefs.current['batches'] = el} style={{ display: activeTab === 'batches' ? '' : 'none' }}>
-          <div className="max-w-2xl mx-auto">
+          <div className="max-w-4xl mx-auto">
             <SectionHeader icon={<FolderOpen className="w-4 h-4 text-primary" />} label="Batches" />
             <BatchManager
               batches={batches}
@@ -296,14 +292,14 @@ export default function App() {
         </div>
 
         <div ref={el => tabRefs.current['presets'] = el} style={{ display: activeTab === 'presets' ? '' : 'none' }}>
-          <div className="max-w-4xl mx-auto">
+          <div className="max-w-[1400px] mx-auto">
             <SectionHeader icon={<Sliders className="w-4 h-4 text-primary" />} label="Presets" />
             <PresetsPanel onApplyPreset={handleApplyPreset} onPresetsChanged={loadPresets} />
           </div>
         </div>
 
         <div ref={el => tabRefs.current['history'] = el} style={{ display: activeTab === 'history' ? '' : 'none' }}>
-          <div className="max-w-3xl mx-auto">
+          <div className="max-w-5xl mx-auto">
             <SectionHeader icon={<History className="w-4 h-4 text-primary" />} label="Job History" />
             <JobHistory />
           </div>

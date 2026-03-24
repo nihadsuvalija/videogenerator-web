@@ -21,10 +21,20 @@ const ASPECT_RATIOS = {
 };
 
 const CANVAS_W = 640; // default display width in px
+const MAX_CANVAS_H = () => Math.floor(window.innerHeight * 0.72);
 
 function getCanvasH(resolution, cw = CANVAS_W) {
   const ratio = ASPECT_RATIOS[resolution] || (16 / 9);
   return Math.round(cw / ratio);
+}
+
+// Return canvas width constrained so height never exceeds MAX_CANVAS_H
+function constrainCanvasW(containerW, resolution) {
+  const ratio = ASPECT_RATIOS[resolution] || (16 / 9);
+  const h = Math.round(containerW / ratio);
+  const maxH = MAX_CANVAS_H();
+  if (h > maxH) return Math.round(maxH * ratio);
+  return containerW;
 }
 
 // Element types rendered on canvas
@@ -43,14 +53,17 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
     if (!stacked) { setCanvasW(CANVAS_W); return; }
     const el = outerRef.current;
     if (!el) return;
-    if (el.offsetWidth > 40) setCanvasW(el.offsetWidth);
+    const update = (w) => {
+      const cw = constrainCanvasW(w, resolution);
+      if (cw > 40) setCanvasW(cw);
+    };
+    if (el.offsetWidth > 40) update(el.offsetWidth);
     const ro = new ResizeObserver(entries => {
-      const w = Math.floor(entries[0].contentRect.width);
-      if (w > 40) setCanvasW(w);
+      update(Math.floor(entries[0].contentRect.width));
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [stacked]);
+  }, [stacked, resolution]);
 
   const canvasH = getCanvasH(resolution, canvasW);
 
@@ -62,7 +75,9 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
   const [resizing, setResizing]  = useState(null);  // { id, startMouseX, startW }
   const [uploadingOverlay, setUploadingOverlay] = useState(false);
   const [dimBackground, setDimBackground] = useState(layout?.dimBackground ?? 0);
+  const [grain, setGrain]                = useState(layout?.grain ?? 0);
   const dimRef       = useRef(layout?.dimBackground ?? 0);
+  const grainRef     = useRef(layout?.grain ?? 0);
   const canvasRef    = useRef();
   const fileInputRef = useRef();
   const saveTimeout  = useRef();
@@ -73,6 +88,9 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
     const dim = layout?.dimBackground ?? 0;
     setDimBackground(dim);
     dimRef.current = dim;
+    const g = layout?.grain ?? 0;
+    setGrain(g);
+    grainRef.current = g;
     setFontFamily(preset?.fontFamily || 'default');
   }, [preset?.id]);
 
@@ -80,7 +98,7 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
   const scheduleLayout = useCallback((newElements) => {
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(() => {
-      onLayoutChange(elementsToLayout(newElements, preset, dimRef.current));
+      onLayoutChange(elementsToLayout(newElements, preset, dimRef.current, grainRef.current));
     }, 400);
   }, [onLayoutChange, preset]);
 
@@ -94,7 +112,16 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
     setDimBackground(v);
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(() => {
-      onLayoutChange(elementsToLayout(elements, preset, v));
+      onLayoutChange(elementsToLayout(elements, preset, v, grainRef.current));
+    }, 400);
+  }, [onLayoutChange, elements, preset]);
+
+  const handleGrainChange = useCallback((v) => {
+    grainRef.current = v;
+    setGrain(v);
+    if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    saveTimeout.current = setTimeout(() => {
+      onLayoutChange(elementsToLayout(elements, preset, dimRef.current, v));
     }, 400);
   }, [onLayoutChange, elements, preset]);
 
@@ -289,7 +316,7 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
           /* Stacked mode: 2-column grid — left: dim+list, right: selected controls */
           <div className="grid grid-cols-2 gap-3 min-w-0">
             <div className="space-y-3">
-              <SidePanelDim dimBackground={dimBackground} onDimChange={handleDimChange} locked={locked} />
+              <SidePanelDim dimBackground={dimBackground} onDimChange={handleDimChange} grain={grain} onGrainChange={handleGrainChange} locked={locked} />
               <SidePanelList elements={elements} selected={selected} setSelected={setSelected} updateElement={updateElement} removeOverlayEl={removeOverlayEl} locked={locked} />
             </div>
             <div>
@@ -307,7 +334,7 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
         ) : (
           /* Horizontal mode: side panel to the right of canvas */
           <div className="flex-1 space-y-3 min-w-0">
-            <SidePanelDim dimBackground={dimBackground} onDimChange={handleDimChange} locked={locked} />
+            <SidePanelDim dimBackground={dimBackground} onDimChange={handleDimChange} grain={grain} onGrainChange={handleGrainChange} locked={locked} />
             <SidePanelList elements={elements} selected={selected} setSelected={setSelected} updateElement={updateElement} removeOverlayEl={removeOverlayEl} locked={locked} />
             {selectedEl && (
               <SidePanelControls
@@ -325,24 +352,41 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
   );
 }
 
-function SidePanelDim({ dimBackground, onDimChange, locked }) {
+function SidePanelDim({ dimBackground, onDimChange, grain, onGrainChange, locked }) {
   return (
-    <div className="rounded-lg border border-border bg-secondary/30 p-3 space-y-2">
-      <div className="flex items-center justify-between">
-        <Label className="text-xs text-muted-foreground uppercase tracking-widest">Background Dim</Label>
-        <span className="text-xs font-mono text-foreground">{Math.round(dimBackground * 100)}%</span>
+    <div className="rounded-lg border border-border bg-secondary/30 p-3 space-y-3">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs text-muted-foreground uppercase tracking-widest">Background Dim</Label>
+          <span className="text-xs font-mono text-foreground">{Math.round(dimBackground * 100)}%</span>
+        </div>
+        <input
+          type="range"
+          min="0" max="1" step="0.01"
+          value={dimBackground}
+          onChange={e => !locked && onDimChange(parseFloat(e.target.value))}
+          disabled={locked}
+          className={cn("w-full h-1.5 rounded-full appearance-none accent-primary bg-border", locked ? "cursor-not-allowed opacity-50" : "cursor-pointer")}
+        />
       </div>
-      <input
-        type="range"
-        min="0" max="1" step="0.01"
-        value={dimBackground}
-        onChange={e => !locked && onDimChange(parseFloat(e.target.value))}
-        disabled={locked}
-        className={cn("w-full h-1.5 rounded-full appearance-none accent-primary bg-border", locked ? "cursor-not-allowed opacity-50" : "cursor-pointer")}
-      />
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs text-muted-foreground uppercase tracking-widest">Grain</Label>
+          <span className="text-xs font-mono text-foreground">{Math.round((grain ?? 0) * 100)}%</span>
+        </div>
+        <input
+          type="range"
+          min="0" max="1" step="0.01"
+          value={grain ?? 0}
+          onChange={e => !locked && onGrainChange(parseFloat(e.target.value))}
+          disabled={locked}
+          className={cn("w-full h-1.5 rounded-full appearance-none accent-primary bg-border", locked ? "cursor-not-allowed opacity-50" : "cursor-pointer")}
+        />
+      </div>
     </div>
   );
 }
+
 
 function SidePanelList({ elements, selected, setSelected, updateElement, removeOverlayEl, locked }) {
   return (
@@ -607,7 +651,7 @@ function buildElements(layout, preset) {
   return elements;
 }
 
-function elementsToLayout(elements, preset, dimBackground = 0) {
+function elementsToLayout(elements, preset, dimBackground = 0, grain = 0) {
   const logo     = elements.find(el => el.id === 'logo');
   const subtitle = elements.find(el => el.id === 'subtitle');
   const overlays = elements.filter(el => el.type === 'overlay').map(el => ({
@@ -638,6 +682,7 @@ function elementsToLayout(elements, preset, dimBackground = 0) {
       },
       overlays,
       dimBackground: parseFloat(dimBackground.toFixed(2)),
+      grain: parseFloat(grain.toFixed(2)),
     }
   };
 }

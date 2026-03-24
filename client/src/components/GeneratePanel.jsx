@@ -371,73 +371,6 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
   return (
     <div className="space-y-4">
 
-      {/* ── Preset picker (full width) ───────────────────────────────────────── */}
-      {presets && presets.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Sliders className="w-4 h-4 text-primary" /> Presets
-            </CardTitle>
-            <CardDescription>Select a preset to load its settings</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-1.5">
-              {presets.map(p => (
-                <button
-                  key={p.id}
-                  onClick={() => onApplyPreset?.(p)}
-                  className={cn(
-                    "flex items-center justify-between px-3 py-2.5 rounded-lg border text-left text-sm transition-all",
-                    activePreset?.id === p.id
-                      ? "border-primary bg-primary/10"
-                      : "border-border hover:border-primary/40 hover:bg-secondary/50"
-                  )}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    {activePreset?.id === p.id
-                      ? <Check className="w-3.5 h-3.5 text-primary flex-shrink-0" />
-                      : <div className="w-3.5 h-3.5 rounded-full border border-muted-foreground/30 flex-shrink-0" />
-                    }
-                    <span className={cn("font-medium truncate", activePreset?.id === p.id && "text-primary")}>{p.name}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
-                    <Badge variant="secondary" className="text-xs mono">{p.resolution}</Badge>
-                    {p.locked && <Lock className="w-3 h-3 text-yellow-400" />}
-                  </div>
-                </button>
-              ))}
-            </div>
-            {activePreset && (
-              <button onClick={onClearPreset} className="mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors">
-                Clear selection ×
-              </button>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── Active preset banner (full width) ───────────────────────────────── */}
-      {activePreset && (
-        <div className={cn(
-          "rounded-lg border px-4 py-3 flex items-center justify-between",
-          locked ? "border-yellow-500/30 bg-yellow-500/10" : "border-primary/30 bg-primary/10"
-        )}>
-          <div className="flex items-center gap-2">
-            {locked ? <Lock className="w-3.5 h-3.5 text-yellow-400" /> : <Sliders className="w-3.5 h-3.5 text-primary" />}
-            <span className="text-sm font-semibold">{activePreset.name}</span>
-            <Badge className={cn("text-xs", locked
-              ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
-              : "bg-primary/20 text-primary border-primary/30"
-            )}>
-              {locked ? 'Locked' : 'Auto-saving'}
-            </Badge>
-          </div>
-          <button onClick={onClearPreset} className="text-muted-foreground hover:text-foreground transition-colors">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
       {/* ── 3-column layout: Layout Editor | Config | Batch + Generate + Log ── */}
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,2.2fr)_minmax(0,1.6fr)_minmax(260px,1fr)] gap-5 items-start">
 
@@ -786,6 +719,73 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
 
         {/* ── COL 3: Batch + Generate + Log (sticky) ───────────────────────── */}
         <div className="space-y-4 xl:sticky xl:top-20 [will-change:transform]">
+
+          {/* Preset picker */}
+          {presets && presets.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-primary" /> Presets
+                </CardTitle>
+                <CardDescription>Select a preset to load its settings</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 gap-1.5">
+                  {presets.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => onApplyPreset?.(p)}
+                      className={cn(
+                        "flex items-center justify-between px-3 py-2.5 rounded-lg border text-left text-sm transition-all",
+                        activePreset?.id === p.id
+                          ? "border-primary bg-primary/10"
+                          : "border-border hover:border-primary/40 hover:bg-secondary/50"
+                      )}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {activePreset?.id === p.id
+                          ? <Check className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+                          : <div className="w-3.5 h-3.5 rounded-full border border-muted-foreground/30 flex-shrink-0" />
+                        }
+                        <span className={cn("font-medium truncate", activePreset?.id === p.id && "text-primary")}>{p.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                        <Badge variant="secondary" className="text-xs mono">{p.resolution}</Badge>
+                        {p.locked && <Lock className="w-3 h-3 text-yellow-400" />}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                {activePreset && (
+                  <button onClick={onClearPreset} className="mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors">
+                    Clear selection ×
+                  </button>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Active preset banner */}
+          {activePreset && (
+            <div className={cn(
+              "rounded-lg border px-4 py-3 flex items-center justify-between",
+              locked ? "border-yellow-500/30 bg-yellow-500/10" : "border-primary/30 bg-primary/10"
+            )}>
+              <div className="flex items-center gap-2 min-w-0">
+                {locked ? <Lock className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" /> : <Sliders className="w-3.5 h-3.5 text-primary flex-shrink-0" />}
+                <span className="text-sm font-semibold truncate">{activePreset.name}</span>
+                <Badge className={cn("text-xs flex-shrink-0", locked
+                  ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
+                  : "bg-primary/20 text-primary border-primary/30"
+                )}>
+                  {locked ? 'Locked' : 'Auto-saving'}
+                </Badge>
+              </div>
+              <button onClick={onClearPreset} className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0 ml-2">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
           {/* Batch picker */}
           <Card className={cn(!selectedBatch && "ring-1 ring-primary/40 glow-orange-sm")}>

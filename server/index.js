@@ -249,6 +249,7 @@ const PresetSchema = new mongoose.Schema({
     overlays: { type: Array, default: [] },
     // Each overlay: { id, file, x, y, w, h }  — all in %
     dimBackground: { type: Number, default: 0 }, // 0 = no dim, 1 = full black
+    grain:         { type: Number, default: 0 }, // 0 = no grain, 1 = heavy grain
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
@@ -831,6 +832,7 @@ async function runGeneration(job, opts) {
       subtitles:     { x: 50, y: 50, fontSize: 52, enabled: true, ...(layout?.subtitles || {}) },
       overlays:      layout?.overlays || [],
       dimBackground: layout?.dimBackground ?? 0,
+      grain:         layout?.grain ?? 0,
     };
 
     // Apply explicit fontSize override if provided
@@ -932,6 +934,13 @@ async function runGeneration(job, opts) {
       const filters = [];
       let cur = inputLabel;
       let nextIdx = extraInputStart;
+
+      // Grain before any overlays
+      if (L.grain > 0) {
+        const strength = Math.round(L.grain * 60);
+        filters.push(`[${cur}]noise=c0s=${strength}:c0f=t+u[bg_grain]`);
+        cur = 'bg_grain';
+      }
 
       // Dim background before overlaying elements
       if (L.dimBackground > 0) {
@@ -1376,6 +1385,7 @@ async function runPostGeneration(job, opts) {
       subtitles:     { x: 50, y: 50, fontSize: 64, enabled: true, ...(layout?.subtitles || {}) },
       overlays:      layout?.overlays || [],
       dimBackground: layout?.dimBackground ?? 0,
+      grain:         layout?.grain ?? 0,
     };
 
     // Apply explicit fontSize override if provided
@@ -1480,6 +1490,13 @@ async function runPostGeneration(job, opts) {
 
       // Scale + crop to exact resolution
       filterParts.push(`[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1[scaled]`);
+
+      // Grain before any overlays
+      if (L.grain > 0) {
+        const strength = Math.round(L.grain * 60);
+        filterParts.push(`[${cur}]noise=c0s=${strength}:c0f=t+u[bg_grain]`);
+        cur = 'bg_grain';
+      }
 
       // Background dim
       if (L.dimBackground > 0) {
