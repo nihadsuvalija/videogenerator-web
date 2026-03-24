@@ -973,6 +973,10 @@ async function runGeneration(job, opts) {
     const allVideoQuotes  = [];
     const allVideoMetadata = {};
 
+    // Shuffle quotes once so each video gets a unique quote in order.
+    // If there are more videos than quotes, cycle through the shuffled list.
+    const shuffledQuotes = shuffle([...quoteLines]);
+
     // Detect best available llama model once (best-effort — metadata is optional)
     let ollamaModel = null;
     try {
@@ -1006,9 +1010,9 @@ async function runGeneration(job, opts) {
 
       if (effectiveCount > 1) await addLog(`--- Video ${vidIdx + 1} / ${effectiveCount} ---`);
 
-      // Pick a random quote for this video (no repeats until pool exhausted)
-      const videoQuote = quoteLines.length > 0
-        ? quoteLines[Math.floor(Math.random() * quoteLines.length)]
+      // Pick quote by index — each video gets a unique quote; cycles if more videos than quotes
+      const videoQuote = shuffledQuotes.length > 0
+        ? shuffledQuotes[vidIdx % shuffledQuotes.length]
         : '';
       if (videoQuote) await addLog(`Quote: "${videoQuote.slice(0, 60)}${videoQuote.length > 60 ? '…' : ''}"`);
 
