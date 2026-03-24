@@ -39,11 +39,18 @@
   }
 }
 
-/* Custom scrollbar */
+/* Custom scrollbar — global */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: hsl(240 5% 11%); }
 ::-webkit-scrollbar-thumb { background: hsl(240 4% 22%); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: hsl(42 48% 57%); }
+
+/* Per-column independent scroll — scrollbar always hidden */
+.col-scroll {
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.col-scroll::-webkit-scrollbar { display: none; }
 
 /* Grain texture overlay */
 body::before {

@@ -215,11 +215,11 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
   return (
     <div className="space-y-4">
 
-      {/* ── 3-column layout: Layout Editor | Config | Batch + Generate + Log ── */}
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,2.2fr)_minmax(0,1.6fr)_minmax(260px,1fr)] gap-5 items-start">
+      {/* ── 3-column layout: Batch+Log | Layout Editor | Config ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,360px)] gap-5 xl:h-[calc(100vh-7rem)]">
 
-        {/* ── COL 1: Layout Editor (always visible) ────────────────────────── */}
-        <div className="space-y-4 min-w-0">
+        {/* ── COL 1 (DOM): Layout Editor → center ──────────────────────────── */}
+        <div className="space-y-4 min-w-0 xl:order-2 col-scroll xl:pb-4">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
@@ -260,8 +260,8 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
           </Card>
         </div>{/* end COL 1 */}
 
-        {/* ── COL 2: Config ────────────────────────────────────────────────── */}
-        <div className="space-y-4 min-w-0">
+        {/* ── COL 2 (DOM): Config → right ──────────────────────────────────── */}
+        <div className="space-y-4 min-w-0 xl:order-3 col-scroll xl:pb-4">
 
           {/* Resolution */}
           <Card>
@@ -383,8 +383,8 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
 
         </div>{/* end COL 2 */}
 
-        {/* ── COL 3: Batch + Generate + Log (sticky) ───────────────────────── */}
-        <div className="space-y-4 xl:sticky xl:top-20 [will-change:transform]">
+        {/* ── COL 3 (DOM): Batch + Generate + Log → left ───────────────────── */}
+        <div className="flex flex-col gap-4 xl:order-1 col-scroll xl:pb-4 [will-change:transform]">
 
           {/* Preset picker */}
           {presets.length > 0 && (
@@ -563,8 +563,8 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
           </Button>
 
           {/* Generation log */}
-          <div className="rounded-xl border border-border overflow-hidden bg-card">
-            <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center justify-between">
+          <div className="rounded-xl border border-border overflow-hidden bg-card flex flex-col flex-1 min-h-0">
+            <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-2">
                 <ImagePlus className="w-4 h-4 text-primary" />
                 <span className="text-sm font-semibold">Generation Log</span>
@@ -578,7 +578,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
               )}
             </div>
             {jobs.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-10 px-6 text-center">
+              <div className="flex flex-col items-center justify-center flex-1 px-6 text-center">
                 <div className="w-10 h-10 rounded-full bg-secondary/50 flex items-center justify-center mb-3">
                   <ImagePlus className="w-4 h-4 text-muted-foreground/50" />
                 </div>
@@ -588,7 +588,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                 </p>
               </div>
             ) : (
-              <div className="p-3 space-y-3 max-h-96 overflow-y-auto">
+              <div className="p-3 space-y-3 overflow-y-auto flex-1">
                 {jobs.map(j => <PostJobStatus key={j.id} job={j} />)}
               </div>
             )}

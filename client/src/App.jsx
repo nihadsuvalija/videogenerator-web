@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Clapperboard, History, Zap, Sliders,
-  FolderOpen, ImagePlus, Home, LogOut, ChevronDown, Sparkles,
+  FolderOpen, ImagePlus, Home, LogOut, Sparkles,
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
 import AuthPage from './components/AuthPage';
@@ -28,7 +28,6 @@ export default function App() {
   const [postPresets, setPostPresets]               = useState([]);
   const [toasts, setToasts]                         = useState([]);
   const [homeRefresh, setHomeRefresh]               = useState(0);
-  const [userMenuOpen, setUserMenuOpen]             = useState(false);
   const tabRefs                                     = useRef({});
 
   // ── Hash-based tab routing so browser Back/Forward works ──────────────────
@@ -42,7 +41,6 @@ export default function App() {
   const setActiveTab = useCallback((tab) => {
     if (tab === activeTab) return;
     window.location.hash = tab;
-    // hashchange listener will update state
   }, [activeTab]);
 
   useEffect(() => {
@@ -55,7 +53,6 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-
   const loadBatches = async () => {
     const res = await fetch(`${API}/api/batches`);
     setBatches(await res.json());
@@ -67,21 +64,17 @@ export default function App() {
   };
 
   const handleApplyPreset = async (preset) => {
-    // Navigate immediately so the tab switch feels instant
     setActiveTab(preset.presetType === 'post' ? 'posts' : 'generate');
-    // Fetch the latest copy from the server so locked/settings are always current
     try {
       const res = await fetch(`${API}/api/presets/${preset.id}`);
       const fresh = await res.json();
       setActivePreset(fresh);
       setPresets(prev => prev.map(p => p.id === fresh.id ? fresh : p));
     } catch {
-      // Fall back to the potentially stale object
       setActivePreset(preset);
       setPresets(prev => prev.map(p => p.id === preset.id ? preset : p));
     }
   };
-
 
   const handlePresetUpdated = (patch) => {
     if (!activePreset) return;
@@ -118,7 +111,6 @@ export default function App() {
     } catch {}
   }, []);
 
-
   // On first mount after login, set hash if missing
   useEffect(() => {
     if (user && !window.location.hash) window.location.hash = 'home';
@@ -131,11 +123,10 @@ export default function App() {
     const el = tabRefs.current[activeTab];
     if (!el) return;
     el.classList.remove('tab-enter');
-    void el.offsetWidth; // force reflow
+    void el.offsetWidth;
     el.classList.add('tab-enter');
   }, [activeTab]);
 
-  // While auth is loading, show blank
   if (authLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -144,192 +135,178 @@ export default function App() {
     );
   }
 
-  // Not logged in — show auth page
   if (!user) return <AuthPage />;
 
-  // ── Creation tabs (left nav group)
   const creationTabs = [
-    { id: 'home',     icon: <Home className="w-3.5 h-3.5" />,      label: 'Home' },
-    { id: 'generate', icon: <Zap className="w-3.5 h-3.5" />,       label: 'Video' },
-    { id: 'posts',    icon: <ImagePlus className="w-3.5 h-3.5" />,  label: 'Posts' },
-    { id: 'metadata', icon: <Sparkles className="w-3.5 h-3.5" />,  label: 'Metadata' },
+    { id: 'home',     icon: <Home className="w-4 h-4" />,      label: 'Home' },
+    { id: 'generate', icon: <Zap className="w-4 h-4" />,       label: 'Video' },
+    { id: 'posts',    icon: <ImagePlus className="w-4 h-4" />,  label: 'Posts' },
+    { id: 'metadata', icon: <Sparkles className="w-4 h-4" />,  label: 'Metadata' },
   ];
 
-  // ── Utility tabs (right nav group)
   const utilityTabs = [
-    { id: 'batches',  icon: <FolderOpen className="w-3.5 h-3.5" />, label: 'Batches' },
-    { id: 'presets',  icon: <Sliders className="w-3.5 h-3.5" />,    label: 'Presets' },
-    { id: 'history',  icon: <History className="w-3.5 h-3.5" />,    label: 'History' },
+    { id: 'batches',  icon: <FolderOpen className="w-4 h-4" />, label: 'Batches' },
+    { id: 'presets',  icon: <Sliders className="w-4 h-4" />,    label: 'Presets' },
+    { id: 'history',  icon: <History className="w-4 h-4" />,    label: 'History' },
   ];
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background flex">
       <Toast toasts={toasts} onDismiss={dismissToast} />
 
-      {/* ── Header ── */}
-      <header className="border-b border-border sticky top-0 z-50 bg-background/80 backdrop-blur-md [will-change:transform]">
-        <div className="max-w-[1920px] mx-auto px-6 h-14 flex items-center gap-4">
+      {/* ── Sidebar ── */}
+      <aside className="w-52 flex-shrink-0 flex flex-col border-r border-border bg-background sticky top-0 h-screen">
 
-          {/* Logo */}
-          <div className="flex items-center gap-2.5 flex-shrink-0">
-            <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
-              <Clapperboard className="w-3.5 h-3.5 text-primary-foreground" />
-            </div>
-            <span className="text-sm font-bold tracking-tight hidden sm:block" style={{ fontFamily: 'Syne' }}>
-              Batch<span className="text-primary">lyst</span>
-            </span>
+        {/* Logo */}
+        <div className="flex items-center gap-2.5 px-4 h-14 border-b border-border flex-shrink-0">
+          <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
+            <Clapperboard className="w-3.5 h-3.5 text-primary-foreground" />
           </div>
+          <span className="text-sm font-bold tracking-tight" style={{ fontFamily: 'Syne' }}>
+            Batch<span className="text-primary">lyst</span>
+          </span>
+        </div>
 
-          {/* ── Left nav group: Home / Video / Posts ── */}
-          <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-1">
-            {creationTabs.map(t => (
-              <TabButton key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)}>
-                {t.icon} {t.label}
-              </TabButton>
-            ))}
-          </div>
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
+
+          {/* Creation group */}
+          <p className="px-2 pt-1 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
+            Create
+          </p>
+          {creationTabs.map(t => (
+            <SideNavItem key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)} icon={t.icon}>
+              {t.label}
+            </SideNavItem>
+          ))}
 
           {/* Divider */}
-          <div className="h-5 w-px bg-border flex-shrink-0" />
+          <div className="my-2 h-px bg-border" />
 
-          {/* ── Right nav group: utilities ── */}
-          <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-1">
-            {utilityTabs.map(t => (
-              <TabButton key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)}>
-                {t.icon}
-                <span className="hidden sm:inline">{t.label}</span>
-                {t.dot && <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
-              </TabButton>
-            ))}
-          </div>
+          {/* Utility group */}
+          <p className="px-2 pt-1 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
+            Manage
+          </p>
+          {utilityTabs.map(t => (
+            <SideNavItem key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)} icon={t.icon}>
+              {t.label}
+            </SideNavItem>
+          ))}
+        </nav>
 
-          {/* Spacer */}
-          <div className="flex-1" />
-
-          {/* User avatar + menu */}
-          <div className="relative">
-            <button
-              onClick={() => setUserMenuOpen(v => !v)}
-              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {user.avatar ? (
-                <img src={user.avatar} alt="" className="w-7 h-7 rounded-full object-cover" />
-              ) : (
-                <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-primary-foreground">
-                  {user.name?.[0]?.toUpperCase()}
-                </div>
-              )}
-              <span className="hidden sm:block font-medium">{user.name?.split(' ')[0]}</span>
-              <ChevronDown className="w-3.5 h-3.5" />
-            </button>
-
-            {userMenuOpen && (
-              <div className="absolute right-0 top-full mt-2 w-44 bg-card border border-border rounded-lg shadow-xl py-1 z-50 dropdown-in">
-                <div className="px-3 py-2 border-b border-border">
-                  <p className="text-xs font-semibold truncate">{user.name}</p>
-                  <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-                </div>
-                <button
-                  onClick={() => { logout(); setUserMenuOpen(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                >
-                  <LogOut className="w-3.5 h-3.5" /> Sign out
-                </button>
+        {/* User section */}
+        <div className="border-t border-border p-3 flex-shrink-0">
+          <div className="flex items-center gap-2.5 mb-2">
+            {user.avatar ? (
+              <img src={user.avatar} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+            ) : (
+              <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-primary-foreground flex-shrink-0">
+                {user.name?.[0]?.toUpperCase()}
               </div>
             )}
+            <div className="min-w-0">
+              <p className="text-xs font-semibold truncate">{user.name}</p>
+              <p className="text-[10px] text-muted-foreground truncate">{user.email}</p>
+            </div>
           </div>
+          <button
+            onClick={logout}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
+          >
+            <LogOut className="w-3.5 h-3.5" /> Sign out
+          </button>
         </div>
-      </header>
-
-      {/* Close user menu on outside click */}
-      {userMenuOpen && (
-        <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
-      )}
+      </aside>
 
       {/* ── Main content ── */}
-      <main className="max-w-[1920px] mx-auto px-6 py-8">
+      <div className="flex-1 min-w-0 flex flex-col xl:overflow-hidden">
+        <main className="flex-1 px-8 py-8 xl:overflow-hidden">
 
-        <div ref={el => tabRefs.current['home'] = el} style={{ display: activeTab === 'home' ? '' : 'none' }}>
-          <HomePage user={user} onNavigate={setActiveTab} refreshTrigger={homeRefresh} />
-        </div>
-
-        <div ref={el => tabRefs.current['generate'] = el} style={{ display: activeTab === 'generate' ? '' : 'none' }}>
-          <SectionHeader icon={<Zap className="w-4 h-4 text-primary" />} label="Video Generation" />
-          <GeneratePanel
-            selectedBatch={selectedBatch}
-            onSelectBatch={setSelectedBatch}
-            batches={batches}
-            fileRefreshTrigger={fileRefreshTrigger}
-            activePreset={activePreset}
-            onPresetUpdated={handlePresetUpdated}
-            onClearPreset={() => setActivePreset(null)}
-            onJobComplete={handleJobComplete}
-            presets={presets}
-            onApplyPreset={handleApplyPreset}
-          />
-        </div>
-
-        <div ref={el => tabRefs.current['posts'] = el} style={{ display: activeTab === 'posts' ? '' : 'none' }}>
-          <SectionHeader icon={<ImagePlus className="w-4 h-4 text-primary" />} label="Posts" />
-          <PostsPanel
-            batches={batches}
-            incomingPreset={activePreset?.presetType === 'post' ? activePreset : null}
-            onClearIncomingPreset={() => setActivePreset(null)}
-            presets={postPresets}
-            onPresetsChanged={loadPresets}
-          />
-        </div>
-
-        <div ref={el => tabRefs.current['metadata'] = el} style={{ display: activeTab === 'metadata' ? '' : 'none' }}>
-          <div className="max-w-4xl mx-auto">
-            <SectionHeader icon={<Sparkles className="w-4 h-4 text-primary" />} label="Metadata" />
-            <MetadataGenerator />
+          <div ref={el => tabRefs.current['home'] = el} style={{ display: activeTab === 'home' ? '' : 'none' }}>
+            <HomePage user={user} onNavigate={setActiveTab} refreshTrigger={homeRefresh} />
           </div>
-        </div>
 
-        <div ref={el => tabRefs.current['batches'] = el} style={{ display: activeTab === 'batches' ? '' : 'none' }}>
-          <div className="max-w-4xl mx-auto">
-            <SectionHeader icon={<FolderOpen className="w-4 h-4 text-primary" />} label="Batches" />
-            <BatchManager
-              batches={batches}
-              onRefresh={loadBatches}
-              onSelectBatch={setSelectedBatch}
+          <div ref={el => tabRefs.current['generate'] = el} style={{ display: activeTab === 'generate' ? '' : 'none' }}>
+            <SectionHeader icon={<Zap className="w-4 h-4 text-primary" />} label="Video Generation" />
+            <GeneratePanel
               selectedBatch={selectedBatch}
-              onFilesChanged={handleFilesChanged}
+              onSelectBatch={setSelectedBatch}
+              batches={batches}
+              fileRefreshTrigger={fileRefreshTrigger}
+              activePreset={activePreset}
+              onPresetUpdated={handlePresetUpdated}
+              onClearPreset={() => setActivePreset(null)}
+              onJobComplete={handleJobComplete}
+              presets={presets}
+              onApplyPreset={handleApplyPreset}
             />
           </div>
-        </div>
 
-        <div ref={el => tabRefs.current['presets'] = el} style={{ display: activeTab === 'presets' ? '' : 'none' }}>
-          <div className="max-w-[1400px] mx-auto">
-            <SectionHeader icon={<Sliders className="w-4 h-4 text-primary" />} label="Presets" />
-            <PresetsPanel onApplyPreset={handleApplyPreset} onPresetsChanged={loadPresets} />
+          <div ref={el => tabRefs.current['posts'] = el} style={{ display: activeTab === 'posts' ? '' : 'none' }}>
+            <SectionHeader icon={<ImagePlus className="w-4 h-4 text-primary" />} label="Posts" />
+            <PostsPanel
+              batches={batches}
+              incomingPreset={activePreset?.presetType === 'post' ? activePreset : null}
+              onClearIncomingPreset={() => setActivePreset(null)}
+              presets={postPresets}
+              onPresetsChanged={loadPresets}
+            />
           </div>
-        </div>
 
-        <div ref={el => tabRefs.current['history'] = el} style={{ display: activeTab === 'history' ? '' : 'none' }}>
-          <div className="max-w-5xl mx-auto">
-            <SectionHeader icon={<History className="w-4 h-4 text-primary" />} label="Job History" />
-            <JobHistory />
+          <div ref={el => tabRefs.current['metadata'] = el} style={{ display: activeTab === 'metadata' ? '' : 'none' }}>
+            <div className="max-w-4xl mx-auto">
+              <SectionHeader icon={<Sparkles className="w-4 h-4 text-primary" />} label="Metadata" />
+              <MetadataGenerator />
+            </div>
           </div>
-        </div>
 
-      </main>
+          <div ref={el => tabRefs.current['batches'] = el} style={{ display: activeTab === 'batches' ? '' : 'none' }}>
+            <div className="max-w-4xl mx-auto">
+              <SectionHeader icon={<FolderOpen className="w-4 h-4 text-primary" />} label="Batches" />
+              <BatchManager
+                batches={batches}
+                onRefresh={loadBatches}
+                onSelectBatch={setSelectedBatch}
+                selectedBatch={selectedBatch}
+                onFilesChanged={handleFilesChanged}
+              />
+            </div>
+          </div>
+
+          <div ref={el => tabRefs.current['presets'] = el} style={{ display: activeTab === 'presets' ? '' : 'none' }}>
+            <div className="max-w-[1400px] mx-auto">
+              <SectionHeader icon={<Sliders className="w-4 h-4 text-primary" />} label="Presets" />
+              <PresetsPanel onApplyPreset={handleApplyPreset} onPresetsChanged={loadPresets} />
+            </div>
+          </div>
+
+          <div ref={el => tabRefs.current['history'] = el} style={{ display: activeTab === 'history' ? '' : 'none' }}>
+            <div className="max-w-5xl mx-auto">
+              <SectionHeader icon={<History className="w-4 h-4 text-primary" />} label="Job History" />
+              <JobHistory />
+            </div>
+          </div>
+
+        </main>
+      </div>
 
       <div className="fixed bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent pointer-events-none" />
     </div>
   );
 }
 
-function TabButton({ active, onClick, children }) {
+function SideNavItem({ active, onClick, icon, children }) {
   return (
     <button
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all",
-        active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+        "w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-all text-left",
+        active
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:text-foreground hover:bg-secondary"
       )}
     >
+      {icon}
       {children}
     </button>
   );
