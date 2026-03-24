@@ -1,4 +1,8 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+const _plays = new WeakMap();
+const safeVideoEnter = e => { const v = e.currentTarget; _plays.set(v, v.play().catch(() => {})); };
+const safeVideoLeave = e => { const v = e.currentTarget; const p = _plays.get(v); if (p) { p.then(() => { v.pause(); v.currentTime = 0; }).catch(() => {}); _plays.delete(v); } else { v.pause(); v.currentTime = 0; } };
 import {
   Film, ImagePlus, Clock, RefreshCw,
   Repeat2, Sliders, ArrowRight, Download, X, Filter,
@@ -15,6 +19,8 @@ const SESSION_TOKEN = (() => {
   if (!t) { t = Math.random().toString(36).slice(2) + Date.now().toString(36); sessionStorage.setItem('vg_session', t); }
   return t;
 })();
+
+const PAGE_SIZE = 12;
 
 const DATE_OPTIONS = [
   { value: 'all',   label: 'All time' },
@@ -67,11 +73,29 @@ export default function HomePage({ user, onNavigate }) {
     return () => clearInterval(pollRef.current);
   }, [activeJobs.length, loadJobs]);
 
-  // Replicate — re-fire the exact same generation
+  // Replicate — re-fire the exact same generation with fresh AI quotes
   const handleReplicateHere = useCallback(async (job) => {
     if (!job.generationParams) return;
-    const params   = { ...job.generationParams, sessionToken: SESSION_TOKEN };
+    const params = { ...job.generationParams, sessionToken: SESSION_TOKEN };
     const endpoint = job.type === 'post' ? '/api/generate-posts' : '/api/generate';
+
+    // Determine how many quotes to regenerate
+    const count = params.videoCount || params.postCount
+      || (params.quotes ? params.quotes.split('\n').filter(l => l.trim()).length : 1);
+
+    try {
+      // Fetch fresh AI quotes matching the original count
+      const qRes  = await fetch(`${API}/api/ai/quotes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count }),
+      });
+      if (qRes.ok) {
+        const { quotes } = await qRes.json();
+        params.quotes = quotes.join('\n');
+      }
+    } catch {}
+
     try {
       await fetch(`${API}${endpoint}`, {
         method: 'POST',
@@ -105,7 +129,13 @@ export default function HomePage({ user, onNavigate }) {
       if (filterPreset !== '__none__' && j.presetName !== filterPreset)        return false;
     }
     return true;
-  }), [doneJobs, filterDate, filterType, filterResolution, filterPreset]);
+  }).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+  [doneJobs, filterDate, filterType, filterResolution, filterPreset]);
+
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  // Reset pagination when filters change
+  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [filterDate, filterType, filterResolution, filterPreset]);
 
   const activeFilters = [
     filterDate !== 'all'       && { key: 'date',  label: DATE_OPTIONS.find(o => o.value === filterDate)?.label,    clear: () => setFilterDate('all') },
@@ -252,24 +282,39 @@ export default function HomePage({ user, onNavigate }) {
               </div>
             )
         ) : (
-          <div style={{ columns: '260px 3', columnGap: '1rem' }}>
-            {/* Active / loading cards first */}
-            {activeJobs.map((job, i) => (
-              <div key={job.id} className="card-in" style={{ breakInside: 'avoid', marginBottom: '1rem', animationDelay: `${i * 40}ms` }}>
-                <LoadingCard job={job} />
+          <>
+            <div style={{ columns: '260px 3', columnGap: '1rem' }}>
+              {/* Active / loading cards first */}
+              {activeJobs.map((job, i) => (
+                <div key={job.id} className="card-in" style={{ breakInside: 'avoid', marginBottom: '1rem', animationDelay: `${i * 40}ms` }}>
+                  <LoadingCard job={job} />
+                </div>
+              ))}
+              {/* Done cards — paginated */}
+              {filteredJobs.slice(0, visibleCount).map((job, i) => (
+                <div
+                  key={job.id}
+                  className="card-in"
+                  style={{ breakInside: 'avoid', marginBottom: '1rem', animationDelay: `${(activeJobs.length + i) * 40}ms` }}
+                >
+                  <JobCard job={job} onReplicate={handleReplicateHere} onDetails={setDetailJob} />
+                </div>
+              ))}
+            </div>
+            {filteredJobs.length > visibleCount && (
+              <div className="flex flex-col items-center gap-2 pt-6">
+                <p className="text-xs text-muted-foreground">
+                  Showing {visibleCount} of {filteredJobs.length}
+                </p>
+                <button
+                  onClick={() => setVisibleCount(c => c + PAGE_SIZE)}
+                  className="px-5 py-2 text-sm font-semibold rounded-lg border border-border hover:border-primary/50 hover:text-primary transition-all text-muted-foreground"
+                >
+                  Load more
+                </button>
               </div>
-            ))}
-            {/* Done cards */}
-            {filteredJobs.map((job, i) => (
-              <div
-                key={job.id}
-                className="card-in"
-                style={{ breakInside: 'avoid', marginBottom: '1rem', animationDelay: `${(activeJobs.length + i) * 40}ms` }}
-              >
-                <JobCard job={job} onReplicate={handleReplicateHere} onDetails={setDetailJob} />
-              </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -452,8 +497,8 @@ function JobCard({ job, onReplicate, onDetails }) {
               preload="metadata"
               muted
               onLoadedMetadata={() => setMediaLoaded(true)}
-              onMouseEnter={e => e.currentTarget.play()}
-              onMouseLeave={e => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
+              onMouseEnter={safeVideoEnter}
+              onMouseLeave={safeVideoLeave}
             />
           )
         ) : (
@@ -558,19 +603,24 @@ function JobCard({ job, onReplicate, onDetails }) {
 function JobDetailsModal({ job, onClose }) {
   const files = job.outputFiles?.length > 0 ? job.outputFiles : (job.outputFile ? [job.outputFile] : []);
 
-  // Close on Escape
+  // Close on Escape + lock body scroll
   React.useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     const handler = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', handler);
+    };
   }, [onClose]);
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm overflow-y-auto py-8 px-4">
-      <div className="w-full max-w-5xl bg-card border border-border rounded-2xl shadow-2xl overflow-hidden fade-in">
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className="w-full max-w-5xl bg-card border border-border rounded-2xl shadow-2xl flex flex-col max-h-[90vh] fade-in">
 
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-secondary/30">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-secondary/30 flex-shrink-0">
           <div>
             <h2 className="text-base font-bold mono">{job.batchName}</h2>
             <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
@@ -592,7 +642,7 @@ function JobDetailsModal({ job, onClose }) {
         </div>
 
         {/* Video list */}
-        <div className="p-6 space-y-8">
+        <div className="p-6 space-y-8 overflow-y-auto flex-1">
           {files.length === 0 && (
             <p className="text-sm text-muted-foreground text-center py-8">No output files found.</p>
           )}
@@ -665,7 +715,8 @@ function JobDetailsModal({ job, onClose }) {
           })}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

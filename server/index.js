@@ -674,19 +674,28 @@ app.post('/api/generate', async (req, res) => {
     videoCount,
     fontFamily,
     fontSize,
+    layout: requestLayout,
   } = req.body;
 
   if (!batchName) return res.status(400).json({ error: 'batchName required' });
 
-  // Load layout + fontFamily + logoFile from preset if provided
-  let layout = null;
+  // Load generation config from preset if provided (preset values take authority)
+  let layout = requestLayout || null;
   let presetFontFamily = 'default';
   let presetLogoFile = null;
+  let resolvedSliceDuration     = Number(sliceDuration)     || 3;
+  let resolvedImageDuration     = Number(imageDuration)     || 0.2;
+  let resolvedPreferredDuration = Number(preferredDuration) || 0;
   if (presetId) {
     const preset = await Preset.findOne({ id: presetId });
-    if (preset?.layout) layout = preset.layout;
-    if (preset?.fontFamily) presetFontFamily = preset.fontFamily;
-    if (preset?.logoFile) presetLogoFile = preset.logoFile;
+    if (preset) {
+      if (!layout && preset.layout) layout = preset.layout;
+      if (preset.fontFamily) presetFontFamily = preset.fontFamily;
+      if (preset.logoFile)   presetLogoFile   = preset.logoFile;
+      if (preset.sliceDuration     != null) resolvedSliceDuration     = preset.sliceDuration;
+      if (preset.imageDuration     != null) resolvedImageDuration     = preset.imageDuration;
+      if (preset.preferredDuration != null) resolvedPreferredDuration = preset.preferredDuration;
+    }
   }
 
   const jobId = uuidv4();
@@ -722,9 +731,9 @@ app.post('/api/generate', async (req, res) => {
     logoSubtext: logoSubtext || '',
     quotes: quotes || '',
     textMaxChars: Number(textMaxChars) || 0,
-    preferredDuration: Number(preferredDuration) || 0,
-    sliceDuration: Number(sliceDuration) || 3,
-    imageDuration: Number(imageDuration) || 0.2,
+    preferredDuration: resolvedPreferredDuration,
+    sliceDuration: resolvedSliceDuration,
+    imageDuration: resolvedImageDuration,
     resolution: resolution || '1920x1080',
     sessionToken: sessionToken || null,
     layout,
@@ -841,9 +850,22 @@ async function runGeneration(job, opts) {
     const logoXExpr = `${Math.round((L.logo.x / 100) * W)}-w/2`;
     const logoYExpr = `${Math.round((L.logo.y / 100) * H)}-h/2`;
 
-    const subXPx  = Math.round((L.subtitles.x / 100) * W);
-    const subYPx  = Math.round((L.subtitles.y / 100) * H);
-    const textXExpr = L.subtitles.x === 50 ? '(w-text_w)/2' : `${subXPx}-text_w/2`;
+    const subXPx     = Math.round((L.subtitles.x / 100) * W);
+    const subYPx     = Math.round((L.subtitles.y / 100) * H);
+    const subWidthPx = Math.round((L.subtitles.w / 100) * W);
+    const textAlign  = L.subtitles.textAlign || 'center';
+    let textXExpr;
+    if (textAlign === 'left') {
+      textXExpr = `${Math.max(0, Math.round(subXPx - subWidthPx / 2))}`;
+    } else if (textAlign === 'right') {
+      textXExpr = `${Math.round(subXPx + subWidthPx / 2)}-text_w`;
+    } else {
+      textXExpr = L.subtitles.x === 50 ? '(w-text_w)/2' : `${subXPx}-text_w/2`;
+    }
+    const textBold   = L.subtitles.textBold || false;
+    const boldParams = textBold
+      ? ':borderw=3:bordercolor=white@0.5:shadowcolor=black@0.9:shadowx=4:shadowy=4'
+      : ':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5';
     const textYExpr = `${subYPx}`;
     const textYSub  = `${subYPx + Math.round(fontMain * 1.3)}`;
 
@@ -951,7 +973,7 @@ async function runGeneration(job, opts) {
         mainLines.forEach((line, idx) => {
           const yPx = Math.max(0, subYPx - Math.round(blockH / 2) + idx * lineH);
           const outLabel = 'dt' + (dtIdx++);
-          filters.push('[' + cur + ']drawtext=' + fontFileParam + 'fontsize=' + fontMain + ':fontcolor=white:x=' + textXExpr + ':y=' + yPx + ":text='" + line + "':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5[" + outLabel + ']');
+          filters.push('[' + cur + ']drawtext=' + fontFileParam + 'fontsize=' + fontMain + ':fontcolor=white:x=' + textXExpr + ':y=' + yPx + ":text='" + line + "'" + boldParams + '[' + outLabel + ']');
           cur = outLabel;
         });
 
@@ -1370,9 +1392,22 @@ async function runPostGeneration(job, opts) {
     const logoXExpr = `${Math.round((L.logo.x / 100) * W)}-w/2`;
     const logoYExpr = `${Math.round((L.logo.y / 100) * H)}-w/2`;
 
-    const subXPx    = Math.round((L.subtitles.x / 100) * W);
-    const subYPx    = Math.round((L.subtitles.y / 100) * H);
-    const textXExpr = L.subtitles.x === 50 ? '(w-text_w)/2' : `${subXPx}-text_w/2`;
+    const subXPx     = Math.round((L.subtitles.x / 100) * W);
+    const subYPx     = Math.round((L.subtitles.y / 100) * H);
+    const subWidthPx = Math.round((L.subtitles.w / 100) * W);
+    const postTextAlign = L.subtitles.textAlign || 'center';
+    let textXExpr;
+    if (postTextAlign === 'left') {
+      textXExpr = `${Math.max(0, Math.round(subXPx - subWidthPx / 2))}`;
+    } else if (postTextAlign === 'right') {
+      textXExpr = `${Math.round(subXPx + subWidthPx / 2)}-text_w`;
+    } else {
+      textXExpr = L.subtitles.x === 50 ? '(w-text_w)/2' : `${subXPx}-text_w/2`;
+    }
+    const postTextBold = L.subtitles.textBold || false;
+    const postBoldParams = postTextBold
+      ? ':borderw=3:bordercolor=white@0.5:shadowcolor=black@0.9:shadowx=4:shadowy=4'
+      : ':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5';
 
     // ── Assets ────────────────────────────────────────────────────────────────
     // Prefer per-preset logo if available, fall back to global logo
@@ -1492,7 +1527,7 @@ async function runPostGeneration(job, opts) {
           const outLabel = `dtp${i}_${idx}`;
           filterParts.push(
             `[${cur}]drawtext=${postFontFileParam}fontsize=${fontMain}:fontcolor=white:x=${textXExpr}:y=${yPx}` +
-            `:text='${line}':shadowcolor=black@0.8:shadowx=3:shadowy=3:borderw=2:bordercolor=black@0.5[${outLabel}]`
+            `:text='${line}'${postBoldParams}[${outLabel}]`
           );
           cur = outLabel;
         });
@@ -1669,8 +1704,7 @@ const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 
 // ─── Shared metadata generation helper ───────────────────────────────────────
 async function generateVideoMeta(quote, resolution, model) {
-  const [rw, rh] = (resolution || '1920x1080').split('x').map(Number);
-  const platformIds = (rw > rh) ? ['youtube'] : ['youtube', 'instagram', 'tiktok'];
+  const platformIds = ['youtube', 'instagram', 'tiktok'];
   const prompts = {
     youtube: `You are a YouTube SEO expert. Generate metadata for a video whose caption/quote is: "${quote}"
 Respond ONLY with valid JSON, no other text:
@@ -1684,18 +1718,20 @@ Respond ONLY with valid JSON, no other text:
   };
   const results = {};
   for (const pid of platformIds) {
-    try {
-      const r = await fetch(`${OLLAMA_URL}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, prompt: prompts[pid], stream: false, options: { temperature: 0.75, top_p: 0.9 } }),
-        signal: AbortSignal.timeout(60000),
-      });
-      if (!r.ok) continue;
-      const data = await r.json();
-      const m = (data.response || '').match(/\{[\s\S]*\}/);
-      if (m) results[pid] = JSON.parse(m[0]);
-    } catch {}
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const r = await fetch(`${OLLAMA_URL}/api/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, prompt: prompts[pid], stream: false, options: { temperature: 0.75, top_p: 0.9 } }),
+          signal: AbortSignal.timeout(60000),
+        });
+        if (!r.ok) continue;
+        const data = await r.json();
+        const m = (data.response || '').match(/\{[\s\S]*\}/);
+        if (m) { results[pid] = JSON.parse(m[0]); break; }
+      } catch {}
+    }
   }
   return results;
 }
@@ -1862,10 +1898,7 @@ app.post('/api/jobs/:id/metadata/generate', async (req, res) => {
     || job.batchName
     || 'video content';
 
-  // Determine platforms based on resolution: horizontal (w>h) = YouTube only
-  const resolution = job.resolution || '1920x1080';
-  const [rw, rh] = resolution.split('x').map(Number);
-  const platformIds = (rw > rh) ? ['youtube'] : ['youtube', 'instagram', 'tiktok'];
+  const platformIds = ['youtube', 'instagram', 'tiktok'];
 
   // Auto-detect best llama3 model
   let model = 'llama3';

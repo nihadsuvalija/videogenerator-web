@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Clapperboard, History, Zap, Sliders,
   FolderOpen, ImagePlus, Home, LogOut, ChevronDown, Sparkles,
@@ -27,6 +27,7 @@ export default function App() {
   const [presets, setPresets]                       = useState([]);
   const [toasts, setToasts]                         = useState([]);
   const [userMenuOpen, setUserMenuOpen]             = useState(false);
+  const tabRefs                                     = useRef({});
 
   // ── Hash-based tab routing so browser Back/Forward works ──────────────────
   const VALID_TABS = ['home','generate','posts','metadata','batches','presets','history'];
@@ -63,10 +64,20 @@ export default function App() {
     loadBatches();
   };
 
-  const handleApplyPreset = (preset) => {
-    setActivePreset(preset);
+  const handleApplyPreset = async (preset) => {
+    // Navigate immediately so the tab switch feels instant
     setActiveTab(preset.presetType === 'post' ? 'posts' : 'generate');
-    setPresets(prev => prev.map(p => p.id === preset.id ? preset : p));
+    // Fetch the latest copy from the server so locked/settings are always current
+    try {
+      const res = await fetch(`${API}/api/presets/${preset.id}`);
+      const fresh = await res.json();
+      setActivePreset(fresh);
+      setPresets(prev => prev.map(p => p.id === fresh.id ? fresh : p));
+    } catch {
+      // Fall back to the potentially stale object
+      setActivePreset(preset);
+      setPresets(prev => prev.map(p => p.id === preset.id ? preset : p));
+    }
   };
 
 
@@ -107,6 +118,15 @@ export default function App() {
   }, [user]);
 
   useEffect(() => { loadBatches(); loadPresets(); }, []);
+
+  // Re-trigger tab-enter animation without remounting
+  useEffect(() => {
+    const el = tabRefs.current[activeTab];
+    if (!el) return;
+    el.classList.remove('tab-enter');
+    void el.offsetWidth; // force reflow
+    el.classList.add('tab-enter');
+  }, [activeTab]);
 
   // While auth is loading, show blank
   if (authLoading) {
@@ -221,16 +241,12 @@ export default function App() {
 
       {/* ── Main content ── */}
       <main className="max-w-7xl mx-auto px-6 py-8">
-        <div key={activeTab} className="tab-enter">
 
-        {activeTab === 'home' && (
-          <HomePage
-            user={user}
-            onNavigate={setActiveTab}
-          />
-        )}
+        <div ref={el => tabRefs.current['home'] = el} style={{ display: activeTab === 'home' ? '' : 'none' }}>
+          <HomePage user={user} onNavigate={setActiveTab} />
+        </div>
 
-        {activeTab === 'generate' && (
+        <div ref={el => tabRefs.current['generate'] = el} style={{ display: activeTab === 'generate' ? '' : 'none' }}>
           <div className="max-w-7xl mx-auto">
             <SectionHeader icon={<Zap className="w-4 h-4 text-primary" />} label="Video Generation" />
             <GeneratePanel
@@ -246,9 +262,9 @@ export default function App() {
               onApplyPreset={handleApplyPreset}
             />
           </div>
-        )}
+        </div>
 
-        {activeTab === 'posts' && (
+        <div ref={el => tabRefs.current['posts'] = el} style={{ display: activeTab === 'posts' ? '' : 'none' }}>
           <div className="max-w-7xl mx-auto">
             <SectionHeader icon={<ImagePlus className="w-4 h-4 text-primary" />} label="Posts" />
             <PostsPanel
@@ -257,16 +273,16 @@ export default function App() {
               onClearIncomingPreset={() => setActivePreset(null)}
             />
           </div>
-        )}
+        </div>
 
-        {activeTab === 'metadata' && (
+        <div ref={el => tabRefs.current['metadata'] = el} style={{ display: activeTab === 'metadata' ? '' : 'none' }}>
           <div className="max-w-2xl mx-auto">
             <SectionHeader icon={<Sparkles className="w-4 h-4 text-primary" />} label="Metadata" />
             <MetadataGenerator />
           </div>
-        )}
+        </div>
 
-        {activeTab === 'batches' && (
+        <div ref={el => tabRefs.current['batches'] = el} style={{ display: activeTab === 'batches' ? '' : 'none' }}>
           <div className="max-w-2xl mx-auto">
             <SectionHeader icon={<FolderOpen className="w-4 h-4 text-primary" />} label="Batches" />
             <BatchManager
@@ -277,23 +293,22 @@ export default function App() {
               onFilesChanged={handleFilesChanged}
             />
           </div>
-        )}
+        </div>
 
-        {activeTab === 'presets' && (
+        <div ref={el => tabRefs.current['presets'] = el} style={{ display: activeTab === 'presets' ? '' : 'none' }}>
           <div className="max-w-4xl mx-auto">
             <SectionHeader icon={<Sliders className="w-4 h-4 text-primary" />} label="Presets" />
             <PresetsPanel onApplyPreset={handleApplyPreset} onPresetsChanged={loadPresets} />
           </div>
-        )}
+        </div>
 
-        {activeTab === 'history' && (
+        <div ref={el => tabRefs.current['history'] = el} style={{ display: activeTab === 'history' ? '' : 'none' }}>
           <div className="max-w-3xl mx-auto">
             <SectionHeader icon={<History className="w-4 h-4 text-primary" />} label="Job History" />
             <JobHistory />
           </div>
-        )}
+        </div>
 
-        </div>{/* end tab-enter wrapper */}
       </main>
 
       <div className="fixed bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent pointer-events-none" />

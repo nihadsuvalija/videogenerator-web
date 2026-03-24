@@ -63,9 +63,7 @@ export default function VideoMetadataPanel({ jobId, file, resolution, initialMet
   const [loading, setLoading] = useState(false);
   const [tone, setTone]       = useState(TONES[0]);
   const [results, setResults] = useState(initialMetadata || null);
-  const [platforms, setPlatforms] = useState(
-    initialMetadata ? Object.keys(initialMetadata) : []
-  );
+  const [platforms, setPlatforms] = useState(['youtube', 'instagram', 'tiktok']);
   const [quote, setQuote]     = useState(initialQuote || '');
   const [error, setError]     = useState(null);
   const [copied, setCopied]   = useState(null);
@@ -99,7 +97,8 @@ export default function VideoMetadataPanel({ jobId, file, resolution, initialMet
 
   // Auto-generate on mount if alwaysOpen and no data yet
   React.useEffect(() => {
-    if (alwaysOpen && !results && !loading) generate();
+    const missingPlatforms = !results || ['youtube', 'instagram', 'tiktok'].some(p => !results[p]);
+    if (alwaysOpen && missingPlatforms && !loading) generate();
   }, []); // eslint-disable-line
 
   const copy = async (text, key) => {

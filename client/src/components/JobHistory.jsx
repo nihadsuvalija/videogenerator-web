@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
+const _plays = new WeakMap();
+const safeVideoEnter = e => { const v = e.currentTarget; _plays.set(v, v.play().catch(() => {})); };
+const safeVideoLeave = e => { const v = e.currentTarget; const p = _plays.get(v); if (p) { p.then(() => { v.pause(); v.currentTime = 0; }).catch(() => {}); _plays.delete(v); } else { v.pause(); v.currentTime = 0; } };
 import { RefreshCw, Download, AlertCircle, Check, Clock, ChevronDown, Pencil, Film, Image, ChevronLeft, ChevronRight, Sliders } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, Progress } from './ui-primitives';
 import { Button } from './ui-button';
@@ -264,8 +267,8 @@ function FilePreview({ file, index, jobId, jobType, onOpenEditor }) {
           className="w-full h-full object-cover"
           preload="metadata"
           muted
-          onMouseEnter={e => e.currentTarget.play()}
-          onMouseLeave={e => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
+          onMouseEnter={safeVideoEnter}
+          onMouseLeave={safeVideoLeave}
         />
       )}
 

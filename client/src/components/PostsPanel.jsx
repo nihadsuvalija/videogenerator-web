@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ImagePlus, Play, RefreshCw, Check, AlertCircle, Download,
-  Lock, Sliders, X, FileText, ChevronDown, ChevronUp,
+  Lock, Sliders, X, FileText,
   Image, Trash2, Upload, Hash, Type, Sparkles, LayoutGrid, List, Eye,
 } from 'lucide-react';
 import FontPicker from './FontPicker';
@@ -16,6 +16,12 @@ import BatchPickerModal from './BatchPickerModal';
 import { cn } from '../lib/utils';
 
 const API = 'http://localhost:5001';
+
+const RESOLUTION_ICONS = {
+  '1920x1080': '🖥️',
+  '1080x1080': '⬛',
+  '1080x1920': '📱',
+};
 
 const RESOLUTION_OPTIONS = [
   { key: '1080x1080', label: '1080×1080', sub: '1:1 Square — Feed' },
@@ -50,8 +56,8 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
   const [fontFamily, setFontFamily]     = useState('default');
   const [fontSize, setFontSize]         = useState('64');
 
-  const [showLayout, setShowLayout]   = useState(false);
-  const [localLayout, setLocalLayout] = useState(DEFAULT_POST_LAYOUT);
+  const [localLayouts, setLocalLayouts]       = useState({ '1080x1080': DEFAULT_POST_LAYOUT });
+  const [activeLayoutRes, setActiveLayoutRes] = useState('1080x1080');
 
   const [generating, setGenerating]             = useState(false);
   const [jobIds, setJobIds]                     = useState([]);
@@ -69,7 +75,8 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
     if (!selectedBatch) return;
     fetch(`${API}/api/batches/${selectedBatch}/files`)
       .then(r => r.json())
-      .then(data => { setBatchFiles(data); setSelectedImages(data.images); });
+      .then(data => { setBatchFiles(data); setSelectedImages(data.images); })
+      .catch(() => {});
   }, [selectedBatch]);
 
   const applyPreset = useCallback((preset) => {
@@ -87,7 +94,20 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
     setTextMaxChars(preset.textMaxChars ?? 25);
     if (preset.fontFamily) setFontFamily(preset.fontFamily);
     if (preset.layout?.subtitles?.fontSize) setFontSize(String(preset.layout.subtitles.fontSize));
-    if (preset.layout) setLocalLayout({ ...DEFAULT_POST_LAYOUT, ...preset.layout });
+    if (preset.layout) {
+      let resKeys;
+      if (preset.resolutionEntries?.length) {
+        resKeys = preset.resolutionEntries.map(e => e.key);
+      } else {
+        resKeys = [preset.resolution || '1080x1080'];
+      }
+      const layouts = {};
+      resKeys.forEach(res => {
+        layouts[res] = { ...DEFAULT_POST_LAYOUT, ...(preset.layouts?.[res] || preset.layout) };
+      });
+      setLocalLayouts(layouts);
+      setActiveLayoutRes(resKeys[0]);
+    }
   }, []);
 
   useEffect(() => {
@@ -114,22 +134,35 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
   }, [selectedResolutions, resolutionCounts]); // eslint-disable-line
 
   const handleLayoutChange = useCallback((patch) => {
-    if (patch.layout) setLocalLayout(patch.layout);
-    if (activePreset) saveToPreset(patch);
-  }, [activePreset, saveToPreset]);
+    if (patch.layout) {
+      setLocalLayouts(prev => {
+        const updated = { ...prev, [activeLayoutRes]: patch.layout };
+        if (activePreset) saveToPreset({ layout: patch.layout, layouts: updated });
+        return updated;
+      });
+    } else {
+      if (activePreset) saveToPreset(patch);
+    }
+  }, [activeLayoutRes, activePreset, saveToPreset]);
 
-  const layoutPreset = activePreset
-    ? { ...activePreset, resolution: selectedResolutions[0] }
-    : { id: null, resolution: selectedResolutions[0], layout: localLayout };
+  const currentLayout = localLayouts[activeLayoutRes] || DEFAULT_POST_LAYOUT;
+  const layoutPreset = {
+    ...(activePreset || {}),
+    id: activePreset?.id || null,
+    resolution: activeLayoutRes,
+    layout: currentLayout,
+  };
 
   useEffect(() => {
     if (!jobIds.length) return;
     const poll = async () => {
-      const results = await Promise.all(jobIds.map(id => fetch(`${API}/api/jobs/${id}`).then(r => r.json())));
-      setJobs(results);
-      const anyActive = results.some(j => j.status !== 'done' && j.status !== 'error');
-      if (anyActive) { pollRef.current = setTimeout(poll, 1200); }
-      else { setGenerating(false); }
+      try {
+        const results = await Promise.all(jobIds.map(id => fetch(`${API}/api/jobs/${id}`).then(r => r.json())));
+        setJobs(results);
+        const anyActive = results.some(j => j.status !== 'done' && j.status !== 'error');
+        if (anyActive) { pollRef.current = setTimeout(poll, 1200); }
+        else { setGenerating(false); }
+      } catch { pollRef.current = setTimeout(poll, 1200); }
     };
     poll();
     return () => clearTimeout(pollRef.current);
@@ -140,8 +173,15 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
 
   const toggleResolution = (key) => {
     setSelectedResolutions(prev => {
-      if (prev.includes(key)) { if (prev.length === 1) return prev; return prev.filter(r => r !== key); }
+      if (prev.includes(key)) {
+        if (prev.length === 1) return prev;
+        const remaining = prev.filter(r => r !== key);
+        setLocalLayouts(l => { const { [key]: _, ...rest } = l; return rest; });
+        setActiveLayoutRes(ar => ar === key ? remaining[0] : ar);
+        return remaining;
+      }
       setResolutionCounts(c => ({ ...c, [key]: c[key] ?? 1 }));
+      setLocalLayouts(l => ({ ...l, [key]: l[prev[0]] ? { ...l[prev[0]] } : { ...DEFAULT_POST_LAYOUT } }));
       return [...prev, key];
     });
   };
@@ -159,13 +199,13 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
   const generate = async () => {
     if (!selectedBatch || selectedImages.length === 0) return;
     setGenerating(true); setJobs([]); setJobIds([]);
-    const layout = activePreset?.layout || localLayout;
     try {
-      const baseParams = { batchName: selectedBatch, imageFiles: selectedImages, quotes, textMaxChars: Number(textMaxChars) || 25, layout, presetId: activePreset?.id || null, fontFamily, fontSize: Number(fontSize) || 64 };
+      const baseParams = { batchName: selectedBatch, imageFiles: selectedImages, quotes, textMaxChars: Number(textMaxChars) || 25, presetId: activePreset?.id || null, fontFamily, fontSize: Number(fontSize) || 64 };
       const ids = await Promise.all(
         selectedResolutions.map(async (res) => {
           const count = resolutionCounts[res] ?? 1;
-          const r = await fetch(`${API}/api/generate-posts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...baseParams, resolution: res, postCount: count }) });
+          const layout = localLayouts[res] || (activePreset?.layout ? { ...DEFAULT_POST_LAYOUT, ...activePreset.layout } : DEFAULT_POST_LAYOUT);
+          const r = await fetch(`${API}/api/generate-posts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...baseParams, resolution: res, postCount: count, layout }) });
           const { jobId } = await r.json();
           return jobId;
         })
@@ -191,7 +231,14 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
           <CardContent>
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-1.5">
               {presets.map(p => (
-                <button key={p.id} onClick={() => applyPreset(p)}
+                <button key={p.id} onClick={async () => {
+                    try {
+                      const res = await fetch(`${API}/api/presets/${p.id}`);
+                      const fresh = await res.json();
+                      applyPreset(fresh);
+                      setPresets(prev => prev.map(pr => pr.id === fresh.id ? fresh : pr));
+                    } catch { applyPreset(p); }
+                  }}
                   className={cn("flex items-center justify-between px-3 py-2.5 rounded-lg border text-left text-sm transition-all",
                     activePreset?.id === p.id ? "border-primary bg-primary/10" : "border-border hover:border-primary/40 hover:bg-secondary/50")}>
                   <div className="flex items-center gap-2 min-w-0">
@@ -206,7 +253,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
               ))}
             </div>
             {activePreset && (
-              <button onClick={() => { setActivePreset(null); setLocalLayout(DEFAULT_POST_LAYOUT); }}
+              <button onClick={() => { setActivePreset(null); setLocalLayouts({ '1080x1080': DEFAULT_POST_LAYOUT }); setActiveLayoutRes('1080x1080'); }}
                 className="mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors">
                 Clear selection ×
               </button>
@@ -226,133 +273,58 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
               {locked ? 'Locked' : 'Auto-saving'}
             </Badge>
           </div>
-          <button onClick={() => { setActivePreset(null); setLocalLayout(DEFAULT_POST_LAYOUT); }} className="text-muted-foreground hover:text-foreground transition-colors">
+          <button onClick={() => { setActivePreset(null); setLocalLayouts({ '1080x1080': DEFAULT_POST_LAYOUT }); setActiveLayoutRes('1080x1080'); }} className="text-muted-foreground hover:text-foreground transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* ── 3-column layout ────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(220px,1fr)_minmax(280px,1.4fr)_minmax(260px,1fr)] gap-5 items-start">
+      {/* ── 3-column layout: Layout Editor | Config | Batch + Generate + Log ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,2.2fr)_minmax(0,1.6fr)_minmax(260px,1fr)] gap-5 items-start">
 
-        {/* ── COL 1: Batch + Image pool ───────────────────────────────────── */}
+        {/* ── COL 1: Layout Editor (always visible) ────────────────────────── */}
         <div className="space-y-4 min-w-0">
-
-          <Card className={cn(!selectedBatch && "ring-1 ring-primary/40 glow-orange-sm")}>
+          <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <Image className="w-4 h-4 text-primary" /> Image Batch
+                <Hash className="w-4 h-4 text-primary" /> Layout Editor
               </CardTitle>
-              <CardDescription>Select a batch containing images for post backgrounds</CardDescription>
+              <CardDescription>
+                Drag elements to reposition · Select an element to adjust alignment, font &amp; bold
+                {!activePreset && ' · Changes are local until a preset is applied'}
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              {selectedBatch ? (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-primary" />
-                    <span className="font-mono font-semibold text-sm text-primary">{selectedBatch}</span>
-                    {batchFiles.images.length > 0 && <Badge variant="secondary" className="text-xs">{batchFiles.images.length} images</Badge>}
-                  </div>
-                  <button onClick={() => setShowBatchPicker(true)}
-                    className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1">
-                    Switch
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <button onClick={() => setShowBatchPicker(true)}
-                    className="w-full flex items-center justify-center gap-2 h-12 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 hover:border-primary/70 transition-all text-primary font-semibold text-sm">
-                    <Image className="w-4 h-4" /> Select a Batch
-                  </button>
-                  {batches.length > 0 && (
-                    <div className="grid gap-1 max-h-40 overflow-y-auto">
-                      {batches.map(b => (
-                        <button key={b.name} onClick={() => setSelectedBatch(b.name)}
-                          className="flex items-center justify-between px-3 py-2 rounded-lg border border-border hover:border-primary/40 hover:bg-secondary/50 text-left text-sm transition-all">
-                          <span className="font-mono text-xs font-semibold">{b.name}</span>
-                          <Badge variant="secondary" className="text-xs">{b.imageCount} images</Badge>
-                        </button>
-                      ))}
-                    </div>
-                  )}
+              {selectedResolutions.length > 1 && (
+                <div className="flex flex-wrap gap-1 mb-3">
+                  {selectedResolutions.map(res => (
+                    <button key={res} onClick={() => setActiveLayoutRes(res)}
+                      className={cn(
+                        "px-3 py-1 rounded-md text-xs font-mono font-semibold transition-all border",
+                        activeLayoutRes === res
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-secondary text-muted-foreground border-border hover:text-foreground hover:border-primary/40"
+                      )}>
+                      {RESOLUTION_ICONS[res] && <span className="mr-1">{RESOLUTION_ICONS[res]}</span>}{res}
+                    </button>
+                  ))}
                 </div>
               )}
+              <LayoutEditor
+                key={activeLayoutRes}
+                preset={layoutPreset}
+                onLayoutChange={handleLayoutChange}
+                onFontChange={(patch) => { if (patch.fontFamily) { setFontFamily(patch.fontFamily); if (activePreset) saveToPreset(patch); } }}
+                previewBgUrl={selectedBatch && selectedImages[0] ? `${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(selectedImages[0])}` : null}
+                previewBgIsVideo={false}
+                stacked
+                locked={locked}
+              />
             </CardContent>
           </Card>
-
-          {selectedBatch && batchFiles.images.length > 0 && (
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Image className="w-4 h-4 text-primary" /> Image Pool
-                  </CardTitle>
-                  <div className="flex items-center gap-2">
-                    {!locked && (
-                      <div className="flex gap-2">
-                        <button onClick={() => setSelectedImages(batchFiles.images)} className="text-xs text-primary hover:underline">All</button>
-                        <span className="text-muted-foreground text-xs">·</span>
-                        <button onClick={() => setSelectedImages([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
-                      </div>
-                    )}
-                    <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-1">
-                      <button onClick={() => setFileViewMode('list')}
-                        className={cn("flex items-center justify-center w-7 h-7 rounded-md transition-all",
-                          fileViewMode === 'list' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
-                        title="List view"><List className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => setFileViewMode('grid')}
-                        className={cn("flex items-center justify-center w-7 h-7 rounded-md transition-all",
-                          fileViewMode === 'grid' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
-                        title="Grid view"><LayoutGrid className="w-3.5 h-3.5" /></button>
-                    </div>
-                  </div>
-                </div>
-                <CardDescription>{selectedImages.length} of {batchFiles.images.length} selected</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {fileViewMode === 'list' ? (
-                  <div className="grid gap-1 max-h-48 overflow-y-auto pr-1">
-                    {batchFiles.images.map(f => (
-                      <button key={f}
-                        onClick={() => !locked && setSelectedImages(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])}
-                        disabled={locked}
-                        className={cn("flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-all text-left w-full",
-                          selectedImages.includes(f) ? "border-purple-500/40 bg-purple-500/10 text-purple-300" : "border-border bg-transparent text-muted-foreground hover:border-border/80",
-                          locked && "opacity-60 cursor-not-allowed")}>
-                        <div className={cn("w-3.5 h-3.5 rounded-sm border flex items-center justify-center flex-shrink-0",
-                          selectedImages.includes(f) ? "border-current bg-current/20" : "border-muted-foreground/40")}>
-                          {selectedImages.includes(f) && <Check className="w-2.5 h-2.5" />}
-                        </div>
-                        <span className="mono truncate">{f}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ columns: '3 90px', columnGap: 6 }}>
-                    {batchFiles.images.map(f => (
-                      <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
-                        <PostImageGridCell
-                          name={f}
-                          src={`${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(f)}`}
-                          selected={selectedImages.includes(f)}
-                          locked={locked}
-                          onToggle={() => !locked && setSelectedImages(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])}
-                          onPreview={() => setFileLightboxSrc(`${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(f)}`)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {fileLightboxSrc && (
-            <MediaLightbox src={fileLightboxSrc} onClose={() => setFileLightboxSrc(null)} />
-          )}
         </div>{/* end COL 1 */}
 
-        {/* ── COL 2: Settings ─────────────────────────────────────────────── */}
+        {/* ── COL 2: Config ────────────────────────────────────────────────── */}
         <div className="space-y-4 min-w-0">
 
           {/* Resolution */}
@@ -420,7 +392,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   )}
-                  <Button disabled={locked || generatingQuotes}
+                  <Button disabled={generatingQuotes}
                     onClick={async () => {
                       setAiQuoteError(null); setGeneratingQuotes(true);
                       try {
@@ -433,7 +405,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                     className="h-7 px-2.5 text-xs gap-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white border-0 shadow-md shadow-violet-500/20 disabled:opacity-50">
                     {generatingQuotes ? <><RefreshCw className="w-3 h-3 animate-spin" /> AI…</> : <><Sparkles className="w-3 h-3" /> AI ({totalPosts})</>}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => txtInputRef.current?.click()} disabled={locked} className="h-7 px-2 text-xs">
+                  <Button variant="outline" size="sm" onClick={() => txtInputRef.current?.click()} className="h-7 px-2 text-xs">
                     <Upload className="w-3 h-3" />
                   </Button>
                   <input ref={txtInputRef} type="file" accept=".txt,text/plain" className="hidden"
@@ -443,7 +415,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
             </CardHeader>
             <CardContent className="space-y-3">
               {aiQuoteError && <p className="text-xs text-red-400 flex items-center gap-1"><AlertCircle className="w-3 h-3 flex-shrink-0" /> {aiQuoteError}</p>}
-              <textarea value={quotes} onChange={e => setQuotes(e.target.value)} disabled={locked}
+              <textarea value={quotes} onChange={e => setQuotes(e.target.value)}
                 placeholder={"The only way to do great work is to love what you do.\nIn the middle of every difficulty lies opportunity."}
                 rows={4}
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y mono disabled:opacity-50" />
@@ -473,43 +445,128 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
             </CardContent>
           </Card>
 
-          {/* Layout editor */}
-          <Card>
-            <button className="w-full flex items-center justify-between px-4 py-3 hover:bg-secondary/30 transition-colors"
-              onClick={() => setShowLayout(v => !v)}>
-              <div className="flex items-center gap-2">
-                <Hash className="w-4 h-4 text-primary" />
-                <span className="text-sm font-semibold">Layout Editor</span>
-                <span className="text-xs text-muted-foreground">— position quote text, logo, overlays</span>
-              </div>
-              {showLayout ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-            </button>
-            {showLayout && (
-              <CardContent className="pt-0 border-t border-border">
-                <p className="text-xs text-muted-foreground mt-3 mb-4">
-                  Drag elements on the canvas to set positions. The <strong>Subtitles / Text</strong> element controls where quotes appear.
-                  {!activePreset && ' Changes are local — apply a preset to save the layout persistently.'}
-                </p>
-                <LayoutEditor preset={layoutPreset} onLayoutChange={handleLayoutChange}
-                  onFontChange={(patch) => { if (patch.fontFamily) { setFontFamily(patch.fontFamily); if (activePreset) saveToPreset(patch); } }} />
-              </CardContent>
-            )}
-          </Card>
-
         </div>{/* end COL 2 */}
 
-        {/* ── COL 3: Generate + Log (sticky) ──────────────────────────────── */}
+        {/* ── COL 3: Batch + Generate + Log (sticky) ───────────────────────── */}
         <div className="space-y-4 xl:sticky xl:top-20 [will-change:transform]">
 
+          {/* Batch picker */}
+          <Card className={cn(!selectedBatch && "ring-1 ring-primary/40 glow-orange-sm")}>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Image className="w-4 h-4 text-primary" /> Image Batch
+              </CardTitle>
+              <CardDescription>Select a batch containing background images</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {selectedBatch ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
+                    <span className="font-mono font-semibold text-sm text-primary truncate">{selectedBatch}</span>
+                    {batchFiles.images.length > 0 && <Badge variant="secondary" className="text-xs flex-shrink-0">{batchFiles.images.length} imgs</Badge>}
+                  </div>
+                  <button onClick={() => setShowBatchPicker(true)}
+                    className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1 flex-shrink-0 ml-2">
+                    Switch
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <button onClick={() => setShowBatchPicker(true)}
+                    className="w-full flex items-center justify-center gap-2 h-12 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 hover:border-primary/70 transition-all text-primary font-semibold text-sm">
+                    <Image className="w-4 h-4" /> Select a Batch
+                  </button>
+                  {batches.length > 0 && (
+                    <div className="grid gap-1 max-h-40 overflow-y-auto">
+                      {batches.map(b => (
+                        <button key={b.name} onClick={() => setSelectedBatch(b.name)}
+                          className="flex items-center justify-between px-3 py-2 rounded-lg border border-border hover:border-primary/40 hover:bg-secondary/50 text-left text-sm transition-all">
+                          <span className="font-mono text-xs font-semibold">{b.name}</span>
+                          <Badge variant="secondary" className="text-xs">{b.imageCount} images</Badge>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Image pool */}
+          {selectedBatch && batchFiles.images.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Image className="w-3.5 h-3.5 text-primary" /> Image Pool
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-2">
+                      <button onClick={() => setSelectedImages(batchFiles.images)} className="text-xs text-primary hover:underline">All</button>
+                      <span className="text-muted-foreground text-xs">·</span>
+                      <button onClick={() => setSelectedImages([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
+                    </div>
+                    <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-1">
+                      <button onClick={() => setFileViewMode('list')}
+                        className={cn("flex items-center justify-center w-7 h-7 rounded-md transition-all",
+                          fileViewMode === 'list' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+                        title="List view"><List className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => setFileViewMode('grid')}
+                        className={cn("flex items-center justify-center w-7 h-7 rounded-md transition-all",
+                          fileViewMode === 'grid' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+                        title="Grid view"><LayoutGrid className="w-3.5 h-3.5" /></button>
+                    </div>
+                  </div>
+                </div>
+                <CardDescription>{selectedImages.length} of {batchFiles.images.length} selected</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {fileViewMode === 'list' ? (
+                  <div className="grid gap-1 max-h-40 overflow-y-auto pr-1">
+                    {batchFiles.images.map(f => (
+                      <button key={f}
+                        onClick={() => setSelectedImages(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])}
+                        className={cn("flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-all text-left w-full",
+                          selectedImages.includes(f) ? "border-purple-500/40 bg-purple-500/10 text-purple-300" : "border-border bg-transparent text-muted-foreground hover:border-border/80")}>
+                        <div className={cn("w-3.5 h-3.5 rounded-sm border flex items-center justify-center flex-shrink-0",
+                          selectedImages.includes(f) ? "border-current bg-current/20" : "border-muted-foreground/40")}>
+                          {selectedImages.includes(f) && <Check className="w-2.5 h-2.5" />}
+                        </div>
+                        <span className="mono truncate">{f}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ columns: '3 80px', columnGap: 6 }}>
+                    {batchFiles.images.map(f => (
+                      <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
+                        <PostImageGridCell
+                          name={f}
+                          src={`${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(f)}`}
+                          selected={selectedImages.includes(f)}
+                          onToggle={() => setSelectedImages(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])}
+                          onPreview={() => setFileLightboxSrc(`${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(f)}`)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Generate button */}
           <Button className="w-full h-14 text-base font-bold gap-2 shadow-lg"
             onClick={generate} disabled={generating || selectedImages.length === 0 || !selectedBatch}>
             {generating ? (
               <><RefreshCw className="w-5 h-5 animate-spin" /> Generating Posts…</>
             ) : (
-              <><ImagePlus className="w-5 h-5" /> Generate {totalPosts} Post{totalPosts !== 1 ? 's' : ''}{selectedResolutions.length > 1 ? ` — ${selectedResolutions.length} resolutions` : ''}</>
+              <><ImagePlus className="w-5 h-5" /> Generate {totalPosts} Post{totalPosts !== 1 ? 's' : ''}</>
             )}
           </Button>
 
+          {/* Generation log */}
           <div className="rounded-xl border border-border overflow-hidden bg-card">
             <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -525,9 +582,9 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
               )}
             </div>
             {jobs.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-14 px-6 text-center">
-                <div className="w-12 h-12 rounded-full bg-secondary/50 flex items-center justify-center mb-3">
-                  <ImagePlus className="w-5 h-5 text-muted-foreground/50" />
+              <div className="flex flex-col items-center justify-center py-10 px-6 text-center">
+                <div className="w-10 h-10 rounded-full bg-secondary/50 flex items-center justify-center mb-3">
+                  <ImagePlus className="w-4 h-4 text-muted-foreground/50" />
                 </div>
                 <p className="text-sm font-medium text-muted-foreground">Ready to generate</p>
                 <p className="text-xs text-muted-foreground/60 mt-1">
@@ -535,11 +592,15 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                 </p>
               </div>
             ) : (
-              <div className="p-3 space-y-3 max-h-[calc(100vh-220px)] overflow-y-auto">
+              <div className="p-3 space-y-3 max-h-96 overflow-y-auto">
                 {jobs.map(j => <PostJobStatus key={j.id} job={j} />)}
               </div>
             )}
           </div>
+
+          {fileLightboxSrc && (
+            <MediaLightbox src={fileLightboxSrc} onClose={() => setFileLightboxSrc(null)} />
+          )}
 
         </div>{/* end COL 3 */}
 
@@ -557,13 +618,12 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
 }
 
 // ── Image grid cell (selection + preview) ─────────────────────────────────────
-function PostImageGridCell({ name, src, selected, locked, onToggle, onPreview }) {
+function PostImageGridCell({ name, src, selected, onToggle, onPreview }) {
   const [hovered, setHovered] = useState(false);
   return (
     <div
       className={cn("relative rounded-lg overflow-hidden border-2 cursor-pointer transition-all",
-        selected ? "border-primary" : "border-border",
-        locked && "opacity-60 cursor-not-allowed")}
+        selected ? "border-primary" : "border-border")}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={onToggle}

@@ -14,6 +14,14 @@ import { cn } from '../lib/utils';
 
 const API = 'http://localhost:5001';
 
+const RESOLUTION_ICONS = {
+  '1920x1080': '🖥️',
+  '1080x1080': '⬛',
+  '1080x1920': '📱',
+  '3840x2160': '🔭',
+  '2160x3840': '📲',
+};
+
 export default function PresetsPanel({ onApplyPreset, onPresetsChanged }) {
   const [presets, setPresets]         = useState([]);
   const [loading, setLoading]         = useState(true);
@@ -186,6 +194,20 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
   const debounceRef = useRef({});
   const [activeTab, setActiveTab] = useState('settings');
 
+  // Derive selected resolution keys from preset
+  const selectedResolutions = preset.resolutionEntries?.length
+    ? preset.resolutionEntries.map(e => e.key)
+    : [preset.resolution || '1920x1080'];
+
+  const [activeLayoutRes, setActiveLayoutRes] = useState(selectedResolutions[0]);
+
+  // Keep activeLayoutRes valid if resolutions change externally
+  useEffect(() => {
+    if (!selectedResolutions.includes(activeLayoutRes)) {
+      setActiveLayoutRes(selectedResolutions[0]);
+    }
+  }, [selectedResolutions.join(',')]); // eslint-disable-line
+
   const debouncedUpdate = useCallback((field, value) => {
     if (debounceRef.current[field]) clearTimeout(debounceRef.current[field]);
     debounceRef.current[field] = setTimeout(() => onUpdate({ [field]: value }), 700);
@@ -197,8 +219,13 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
   }, [onUpdate]);
 
   const handleLayoutChange = useCallback((layoutPatch) => {
-    onUpdate(layoutPatch);
-  }, [onUpdate]);
+    if (layoutPatch.layout) {
+      const updatedLayouts = { ...(preset.layouts || {}), [activeLayoutRes]: layoutPatch.layout };
+      onUpdate({ layout: layoutPatch.layout, layouts: updatedLayouts });
+    } else {
+      onUpdate(layoutPatch);
+    }
+  }, [activeLayoutRes, preset.layouts, onUpdate]);
 
   return (
     <Card className={cn(
@@ -408,8 +435,28 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
                 <p className="text-xs text-muted-foreground mb-4">
                   Drag elements on the canvas to set positions. Changes auto-save to this preset.
                 </p>
+                {selectedResolutions.length > 1 && (
+                  <div className="flex flex-wrap gap-1 mb-3">
+                    {selectedResolutions.map(res => (
+                      <button key={res} onClick={() => setActiveLayoutRes(res)}
+                        className={cn(
+                          "px-3 py-1 rounded-md text-xs font-mono font-semibold transition-all border",
+                          activeLayoutRes === res
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-secondary text-muted-foreground border-border hover:text-foreground hover:border-primary/40"
+                        )}>
+                        {RESOLUTION_ICONS[res] && <span className="mr-1">{RESOLUTION_ICONS[res]}</span>}{res}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <LayoutEditor
-                  preset={preset}
+                  key={activeLayoutRes}
+                  preset={{
+                    ...preset,
+                    resolution: activeLayoutRes,
+                    layout: preset.layouts?.[activeLayoutRes] || preset.layout,
+                  }}
                   onLayoutChange={handleLayoutChange}
                   onFontChange={(patch) => onUpdate(patch)}
                 />

@@ -341,21 +341,28 @@ function FileRow({ name, onDelete }) {
 // ── Grid cell ──────────────────────────────────────────────────────────────────
 function GridCell({ name, src, isVideo, onDelete, onPreview }) {
   const [hovered, setHovered] = useState(false);
-  const videoRef = useRef(null);
+  const videoRef    = useRef(null);
+  const playPromise = useRef(null);
 
   const handleMouseEnter = () => {
     setHovered(true);
     if (isVideo && videoRef.current) {
       videoRef.current.currentTime = 0;
-      videoRef.current.play().catch(() => {});
+      playPromise.current = videoRef.current.play().catch(() => {});
     }
   };
 
   const handleMouseLeave = () => {
     setHovered(false);
     if (isVideo && videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = 0;
+      const v = videoRef.current;
+      if (playPromise.current) {
+        playPromise.current.then(() => { v.pause(); v.currentTime = 0; }).catch(() => {});
+        playPromise.current = null;
+      } else {
+        v.pause();
+        v.currentTime = 0;
+      }
     }
   };
 

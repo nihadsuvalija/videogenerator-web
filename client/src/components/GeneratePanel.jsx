@@ -4,10 +4,11 @@ import MediaLightbox from './MediaLightbox';
 import BatchPickerModal from './BatchPickerModal';
 import LyricsPanel from './LyricsPanel';
 import FontPicker from './FontPicker';
+import LayoutEditor from './LayoutEditor';
 import {
   Clapperboard, Play, Pause, Upload, RefreshCw, Check, AlertCircle,
   Download, Trash2, Music, Monitor, FileText, Sliders, Lock, X, Type, Sparkles,
-  Film, Image, Volume2, VolumeX, Scissors, LayoutGrid, List, Eye,
+  Film, Image, Volume2, VolumeX, Scissors, LayoutGrid, List, Eye, Hash,
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -30,6 +31,13 @@ const RESOLUTION_ICONS = {
   '1080x1920': '📱',
   '3840x2160': '🔭',
   '2160x3840': '📲',
+};
+
+const DEFAULT_VIDEO_LAYOUT = {
+  logo:          { x: 50, y: 90, w: 18, enabled: true },
+  subtitles:     { x: 50, y: 50, fontSize: 52, enabled: true, textAlign: 'center', textBold: false },
+  overlays:      [],
+  dimBackground: 0,
 };
 
 export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = [], fileRefreshTrigger, activePreset, onPresetUpdated, onClearPreset, onJobComplete, presets, onApplyPreset }) {
@@ -63,6 +71,9 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
   const [isPlaying, setIsPlaying]               = useState(false);
   const [uploadingSrt, setUploadingSrt]         = useState(false);
   const [uploadingAudio, setUploadingAudio]     = useState(false);
+
+  const [localLayouts, setLocalLayouts]         = useState({ '1920x1080': DEFAULT_VIDEO_LAYOUT });
+  const [activeLayoutRes, setActiveLayoutRes]   = useState('1920x1080');
 
   const [generating, setGenerating]             = useState(false);
   const [jobIds, setJobIds]                     = useState([]);
@@ -98,6 +109,21 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
     setTextMaxChars(String(activePreset.textMaxChars ?? 20));
     setPreferredDuration(String(activePreset.preferredDuration ?? 20));
     setVideoCount(activePreset.videoCount ?? 1);
+    // Build per-resolution layouts from preset
+    let resKeys;
+    if (activePreset.resolutionEntries?.length) {
+      resKeys = activePreset.resolutionEntries.map(e => e.key);
+    } else {
+      resKeys = [activePreset.resolution || '1920x1080'];
+    }
+    if (activePreset.layout) {
+      const layouts = {};
+      resKeys.forEach(res => {
+        layouts[res] = { ...DEFAULT_VIDEO_LAYOUT, ...(activePreset.layouts?.[res] || activePreset.layout) };
+      });
+      setLocalLayouts(layouts);
+      setActiveLayoutRes(resKeys[0]);
+    }
     // File selections are batch-specific — not loaded from preset
   }, [activePreset?.id]); // re-run only when a different preset is applied
 
@@ -119,16 +145,32 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
   }, [activePreset, locked, onPresetUpdated]);
   saveBackFnRef.current = saveBackToPreset;
 
+  const handleLayoutChange = useCallback((patch) => {
+    if (patch.layout) {
+      setLocalLayouts(prev => {
+        const updated = { ...prev, [activeLayoutRes]: patch.layout };
+        if (activePreset && !locked) saveBackToPreset({ layout: patch.layout, layouts: updated });
+        return updated;
+      });
+    } else {
+      if (activePreset && !locked) saveBackToPreset(patch);
+    }
+  }, [activeLayoutRes, activePreset, locked, saveBackToPreset]);
+
   // Wrapped setters that also save back to preset
   const toggleResolution = (key) => {
     setSelectedResolutions(prev => {
       if (prev.includes(key)) {
         if (prev.length === 1) return prev;
-        return prev.filter(r => r !== key);
+        const remaining = prev.filter(r => r !== key);
+        setLocalLayouts(l => { const { [key]: _, ...rest } = l; return rest; });
+        setActiveLayoutRes(ar => ar === key ? remaining[0] : ar);
+        return remaining;
       }
-      const next = [...prev, key];
       setResolutionCounts(c => ({ ...c, [key]: c[key] ?? 1 }));
-      return next;
+      // Copy layout from first existing resolution as starting point
+      setLocalLayouts(l => ({ ...l, [key]: l[prev[0]] ? { ...l[prev[0]] } : { ...DEFAULT_VIDEO_LAYOUT } }));
+      return [...prev, key];
     });
   };
 
@@ -174,23 +216,25 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
             setSelectedVideos(data.videos);
             setSelectedImages(data.images);
           }
-        });
+        })
+        .catch(() => {});
     }
   }, [selectedBatch, fileRefreshTrigger]);
 
   // Load logo + overlay files
   useEffect(() => {
-    fetch(`${API}/api/assets/logo`).then(r => r.json()).then(d => setLogoFile(d.logo));
+    fetch(`${API}/api/assets/logo`).then(r => r.json()).then(d => setLogoFile(d.logo)).catch(() => {});
     fetch(`${API}/api/assets/overlays/${SESSION_TOKEN}`).then(r => r.json()).then(d => {
       setSrtFile(d.srt || null);
       setAudioFile(d.audio || null);
-    });
+    }).catch(() => {});
   }, []);
 
   // Poll all active job statuses
   useEffect(() => {
     if (!jobIds.length) return;
     const poll = async () => {
+      try {
       const results = await Promise.all(
         jobIds.map(id => fetch(`${API}/api/jobs/${id}`).then(r => r.json()))
       );
@@ -202,6 +246,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
         setGenerating(false);
         results.forEach(j => onJobComplete?.(j));
       }
+      } catch { pollRef.current = setTimeout(poll, 1200); }
     };
     poll();
     return () => clearTimeout(pollRef.current);
@@ -287,10 +332,11 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
       const ids = await Promise.all(
         selectedResolutions.map(async (res) => {
           const count = resolutionCounts[res] ?? 1;
+          const layout = localLayouts[res] || (activePreset?.layout ? { ...DEFAULT_VIDEO_LAYOUT, ...activePreset.layout } : DEFAULT_VIDEO_LAYOUT);
           const r = await fetch(`${API}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...baseParams, resolution: res, videoCount: count }),
+            body: JSON.stringify({ ...baseParams, resolution: res, videoCount: count, layout }),
           });
           const { jobId } = await r.json();
           return jobId;
@@ -302,13 +348,26 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
 
   const hasContent = selectedVideos.length > 0 || selectedImages.length > 0;
 
+  // Background preview URL for LayoutEditor
+  const previewBgIsVideo = selectedVideos.length > 0;
+  const previewBgUrl = selectedBatch
+    ? previewBgIsVideo && selectedVideos[0]
+      ? `${API}/batches-media/${selectedBatch}/videos/${encodeURIComponent(selectedVideos[0])}`
+      : selectedImages[0]
+      ? `${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(selectedImages[0])}`
+      : null
+    : null;
+
+  const currentLayout = localLayouts[activeLayoutRes] || DEFAULT_VIDEO_LAYOUT;
+  const layoutPreset = {
+    ...(activePreset || {}),
+    id: activePreset?.id || null,
+    resolution: activeLayoutRes,
+    layout: currentLayout,
+  };
+
   // Pre-compute generate button label (avoid IIFE in JSX)
   const totalVideos = selectedResolutions.reduce((sum, r) => sum + (resolutionCounts[r] ?? 1), 0);
-  const btnResLabel = selectedResolutions.map(r => {
-    const c = resolutionCounts[r] ?? 1;
-    return c > 1 ? `${c}×${r}` : r;
-  }).join(', ');
-
   return (
     <div className="space-y-4">
 
@@ -379,144 +438,52 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
         </div>
       )}
 
-      {/* ── 3-column layout ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(220px,1fr)_minmax(280px,1.4fr)_minmax(260px,1fr)] gap-5 items-start">
+      {/* ── 3-column layout: Layout Editor | Config | Batch + Generate + Log ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,2.2fr)_minmax(0,1.6fr)_minmax(260px,1fr)] gap-5 items-start">
 
-        {/* ── COL 1: Batch + Files ─────────────────────────────────────────── */}
+        {/* ── COL 1: Layout Editor (always visible) ────────────────────────── */}
         <div className="space-y-4 min-w-0">
-
-          <Card className={cn(!selectedBatch && "ring-1 ring-primary/40 glow-orange-sm")}>
+          <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <Clapperboard className="w-4 h-4 text-primary" /> Batch
+                <Hash className="w-4 h-4 text-primary" /> Layout Editor
               </CardTitle>
-              <CardDescription>Choose which batch of media files to use</CardDescription>
+              <CardDescription>
+                Drag elements to reposition · Select an element to adjust alignment, font &amp; bold
+                {!activePreset && ' · Changes are local until a preset is applied'}
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              {selectedBatch ? (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-primary" />
-                    <span className="font-mono font-semibold text-sm text-primary">{selectedBatch}</span>
-                    {batchFiles.videos.length > 0 && <Badge variant="secondary" className="text-xs">{batchFiles.videos.length}v</Badge>}
-                    {batchFiles.images.length > 0 && <Badge variant="secondary" className="text-xs">{batchFiles.images.length}i</Badge>}
-                  </div>
-                  <button onClick={() => setShowBatchPicker(true)} className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1">
-                    Switch
-                  </button>
+              {selectedResolutions.length > 1 && (
+                <div className="flex flex-wrap gap-1 mb-3">
+                  {selectedResolutions.map(res => (
+                    <button key={res} onClick={() => setActiveLayoutRes(res)}
+                      className={cn(
+                        "px-3 py-1 rounded-md text-xs font-mono font-semibold transition-all border",
+                        activeLayoutRes === res
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-secondary text-muted-foreground border-border hover:text-foreground hover:border-primary/40"
+                      )}>
+                      {RESOLUTION_ICONS[res] && <span className="mr-1">{RESOLUTION_ICONS[res]}</span>}{res}
+                    </button>
+                  ))}
                 </div>
-              ) : (
-                <button onClick={() => setShowBatchPicker(true)} className="w-full flex items-center justify-center gap-2 h-12 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 hover:border-primary/70 transition-all text-primary font-semibold text-sm">
-                  <Clapperboard className="w-4 h-4" /> Select a Batch
-                </button>
               )}
+              <LayoutEditor
+                key={activeLayoutRes}
+                preset={layoutPreset}
+                onLayoutChange={handleLayoutChange}
+                onFontChange={(patch) => { if (patch.fontFamily) { setAndSaveFontFamily(patch.fontFamily); } }}
+                previewBgUrl={previewBgUrl}
+                previewBgIsVideo={previewBgIsVideo}
+                stacked
+                locked={locked}
+              />
             </CardContent>
           </Card>
-
-          {selectedBatch && (
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <span className="text-primary font-mono text-sm">{selectedBatch}</span> — Files
-                  </CardTitle>
-                  <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-1">
-                    <button onClick={() => setFileViewMode('list')}
-                      className={cn("flex items-center justify-center w-7 h-7 rounded-md transition-all",
-                        fileViewMode === 'list' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
-                      title="List view"><List className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => setFileViewMode('grid')}
-                      className={cn("flex items-center justify-center w-7 h-7 rounded-md transition-all",
-                        fileViewMode === 'grid' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
-                      title="Grid view"><LayoutGrid className="w-3.5 h-3.5" /></button>
-                  </div>
-                </div>
-                <CardDescription>Select which files to include</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {batchFiles.videos.length > 0 && (
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <Label className="text-xs uppercase tracking-widest text-muted-foreground">Video Pool</Label>
-                      {!locked && (
-                        <div className="flex gap-2">
-                          <button onClick={() => setAndSaveVideos(batchFiles.videos)} className="text-xs text-primary hover:underline">All</button>
-                          <span className="text-muted-foreground text-xs">·</span>
-                          <button onClick={() => setAndSaveVideos([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
-                        </div>
-                      )}
-                    </div>
-                    {fileViewMode === 'list' ? (
-                      <div className="grid gap-1 max-h-48 overflow-y-auto pr-1">
-                        {batchFiles.videos.map(f => (
-                          <FileToggle key={f} name={f} selected={selectedVideos.includes(f)}
-                            onToggle={() => !locked && setAndSaveVideos(selectedVideos.includes(f) ? selectedVideos.filter(x => x !== f) : [...selectedVideos, f])}
-                            color="blue" locked={locked} />
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ columns: '3 90px', columnGap: 6 }}>
-                        {batchFiles.videos.map(f => (
-                          <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
-                            <BatchFileGridCell name={f}
-                              src={`${API}/batches-media/${selectedBatch}/videos/${encodeURIComponent(f)}`}
-                              isVideo selected={selectedVideos.includes(f)} locked={locked}
-                              onToggle={() => !locked && setAndSaveVideos(selectedVideos.includes(f) ? selectedVideos.filter(x => x !== f) : [...selectedVideos, f])}
-                              onPreview={() => setFileLightboxSrc(`${API}/batches-media/${selectedBatch}/videos/${encodeURIComponent(f)}`)} />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {batchFiles.images.length > 0 && (
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <Label className="text-xs uppercase tracking-widest text-muted-foreground">Image Pool</Label>
-                      {!locked && (
-                        <div className="flex gap-2">
-                          <button onClick={() => setAndSaveImages(batchFiles.images)} className="text-xs text-primary hover:underline">All</button>
-                          <span className="text-muted-foreground text-xs">·</span>
-                          <button onClick={() => setAndSaveImages([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
-                        </div>
-                      )}
-                    </div>
-                    {fileViewMode === 'list' ? (
-                      <div className="grid gap-1 max-h-48 overflow-y-auto pr-1">
-                        {batchFiles.images.map(f => (
-                          <FileToggle key={f} name={f} selected={selectedImages.includes(f)}
-                            onToggle={() => !locked && setAndSaveImages(selectedImages.includes(f) ? selectedImages.filter(x => x !== f) : [...selectedImages, f])}
-                            color="purple" locked={locked} />
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ columns: '3 90px', columnGap: 6 }}>
-                        {batchFiles.images.map(f => (
-                          <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
-                            <BatchFileGridCell name={f}
-                              src={`${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(f)}`}
-                              isVideo={false} selected={selectedImages.includes(f)} locked={locked}
-                              onToggle={() => !locked && setAndSaveImages(selectedImages.includes(f) ? selectedImages.filter(x => x !== f) : [...selectedImages, f])}
-                              onPreview={() => setFileLightboxSrc(`${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(f)}`)} />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {batchFiles.videos.length === 0 && batchFiles.images.length === 0 && (
-                  <p className="text-sm text-muted-foreground text-center py-4">No files in this batch yet.</p>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {fileLightboxSrc && (
-            <MediaLightbox src={fileLightboxSrc} onClose={() => setFileLightboxSrc(null)} />
-          )}
         </div>{/* end COL 1 */}
 
-        {/* ── COL 2: Settings ──────────────────────────────────────────────── */}
+        {/* ── COL 2: Config ────────────────────────────────────────────────── */}
         <div className="space-y-4 min-w-0">
 
           {/* Resolution */}
@@ -629,7 +596,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   {srtFile && <span className="text-xs text-yellow-400 hidden sm:flex items-center gap-1"><FileText className="w-3 h-3" /> SRT overrides</span>}
-                  <Button variant="outline" size="sm" disabled={!!srtFile || locked || generatingQuotes}
+                  <Button variant="outline" size="sm" disabled={!!srtFile || generatingQuotes}
                     onClick={async () => {
                       setAiQuoteError(null); setGeneratingQuotes(true);
                       try {
@@ -643,7 +610,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                   >
                     {generatingQuotes ? <><RefreshCw className="w-3 h-3 animate-spin" /> AI…</> : <><Sparkles className="w-3 h-3" /> AI ({totalVideos})</>}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => quotesFileRef.current?.click()} disabled={!!srtFile || locked} className="h-7 px-2 text-xs">
+                  <Button variant="outline" size="sm" onClick={() => quotesFileRef.current?.click()} disabled={!!srtFile} className="h-7 px-2 text-xs">
                     <Upload className="w-3 h-3" />
                   </Button>
                   <input ref={quotesFileRef} type="file" accept=".txt" className="hidden"
@@ -656,9 +623,9 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
               <textarea
                 placeholder={"One quote per line\n\nBelieve in yourself\nWork hard, dream big"}
                 value={quotes} onChange={e => setAndSaveQuotes(e.target.value)}
-                disabled={!!srtFile || locked} rows={4}
+                disabled={!!srtFile} rows={4}
                 className={cn("w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y mono",
-                  (srtFile || locked) && "opacity-40 cursor-not-allowed")}
+                  srtFile && "opacity-40 cursor-not-allowed")}
               />
               {quotes.trim() && (
                 <p className="text-xs text-muted-foreground">{quotes.split('\n').filter(l => l.trim()).length} quote{quotes.split('\n').filter(l => l.trim()).length !== 1 ? 's' : ''}</p>
@@ -817,18 +784,143 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
 
         </div>{/* end COL 2 */}
 
-        {/* ── COL 3: Generate + Log (sticky) ───────────────────────────────── */}
+        {/* ── COL 3: Batch + Generate + Log (sticky) ───────────────────────── */}
         <div className="space-y-4 xl:sticky xl:top-20 [will-change:transform]">
 
+          {/* Batch picker */}
+          <Card className={cn(!selectedBatch && "ring-1 ring-primary/40 glow-orange-sm")}>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Clapperboard className="w-4 h-4 text-primary" /> Batch
+              </CardTitle>
+              <CardDescription>Choose which batch of media files to use</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {selectedBatch ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
+                    <span className="font-mono font-semibold text-sm text-primary truncate">{selectedBatch}</span>
+                    {batchFiles.videos.length > 0 && <Badge variant="secondary" className="text-xs flex-shrink-0">{batchFiles.videos.length}v</Badge>}
+                    {batchFiles.images.length > 0 && <Badge variant="secondary" className="text-xs flex-shrink-0">{batchFiles.images.length}i</Badge>}
+                  </div>
+                  <button onClick={() => setShowBatchPicker(true)} className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1 flex-shrink-0 ml-2">
+                    Switch
+                  </button>
+                </div>
+              ) : (
+                <button onClick={() => setShowBatchPicker(true)} className="w-full flex items-center justify-center gap-2 h-12 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 hover:border-primary/70 transition-all text-primary font-semibold text-sm">
+                  <Clapperboard className="w-4 h-4" /> Select a Batch
+                </button>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* File pool */}
+          {selectedBatch && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <span className="text-primary font-mono text-xs">{selectedBatch}</span> — Files
+                  </CardTitle>
+                  <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-1">
+                    <button onClick={() => setFileViewMode('list')}
+                      className={cn("flex items-center justify-center w-7 h-7 rounded-md transition-all",
+                        fileViewMode === 'list' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+                      title="List view"><List className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => setFileViewMode('grid')}
+                      className={cn("flex items-center justify-center w-7 h-7 rounded-md transition-all",
+                        fileViewMode === 'grid' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+                      title="Grid view"><LayoutGrid className="w-3.5 h-3.5" /></button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {batchFiles.videos.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <Label className="text-xs uppercase tracking-widest text-muted-foreground">Videos</Label>
+                      <div className="flex gap-2">
+                        <button onClick={() => setAndSaveVideos(batchFiles.videos)} className="text-xs text-primary hover:underline">All</button>
+                        <span className="text-muted-foreground text-xs">·</span>
+                        <button onClick={() => setAndSaveVideos([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
+                      </div>
+                    </div>
+                    {fileViewMode === 'list' ? (
+                      <div className="grid gap-1 max-h-40 overflow-y-auto pr-1">
+                        {batchFiles.videos.map(f => (
+                          <FileToggle key={f} name={f} selected={selectedVideos.includes(f)}
+                            onToggle={() => setAndSaveVideos(selectedVideos.includes(f) ? selectedVideos.filter(x => x !== f) : [...selectedVideos, f])}
+                            color="blue" />
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ columns: '3 80px', columnGap: 6 }}>
+                        {batchFiles.videos.map(f => (
+                          <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
+                            <BatchFileGridCell name={f}
+                              src={`${API}/batches-media/${selectedBatch}/videos/${encodeURIComponent(f)}`}
+                              isVideo selected={selectedVideos.includes(f)}
+                              onToggle={() => setAndSaveVideos(selectedVideos.includes(f) ? selectedVideos.filter(x => x !== f) : [...selectedVideos, f])}
+                              onPreview={() => setFileLightboxSrc(`${API}/batches-media/${selectedBatch}/videos/${encodeURIComponent(f)}`)} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {batchFiles.images.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <Label className="text-xs uppercase tracking-widest text-muted-foreground">Images</Label>
+                      <div className="flex gap-2">
+                        <button onClick={() => setAndSaveImages(batchFiles.images)} className="text-xs text-primary hover:underline">All</button>
+                        <span className="text-muted-foreground text-xs">·</span>
+                        <button onClick={() => setAndSaveImages([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
+                      </div>
+                    </div>
+                    {fileViewMode === 'list' ? (
+                      <div className="grid gap-1 max-h-40 overflow-y-auto pr-1">
+                        {batchFiles.images.map(f => (
+                          <FileToggle key={f} name={f} selected={selectedImages.includes(f)}
+                            onToggle={() => setAndSaveImages(selectedImages.includes(f) ? selectedImages.filter(x => x !== f) : [...selectedImages, f])}
+                            color="purple" />
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ columns: '3 80px', columnGap: 6 }}>
+                        {batchFiles.images.map(f => (
+                          <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
+                            <BatchFileGridCell name={f}
+                              src={`${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(f)}`}
+                              isVideo={false} selected={selectedImages.includes(f)}
+                              onToggle={() => setAndSaveImages(selectedImages.includes(f) ? selectedImages.filter(x => x !== f) : [...selectedImages, f])}
+                              onPreview={() => setFileLightboxSrc(`${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(f)}`)} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {batchFiles.videos.length === 0 && batchFiles.images.length === 0 && (
+                  <p className="text-sm text-muted-foreground text-center py-4">No files in this batch yet.</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Generate button */}
           <Button className="w-full h-14 text-base font-bold gap-2 shadow-lg"
             onClick={generate} disabled={generating || !hasContent}>
             {generating ? (
               <><RefreshCw className="w-5 h-5 animate-spin" /> Generating…</>
             ) : (
-              <><Play className="w-5 h-5" /> Generate {totalVideos > 1 ? `${totalVideos} Videos` : 'Video'}{selectedResolutions.length > 1 ? ` — ${btnResLabel}` : ''}</>
+              <><Play className="w-5 h-5" /> Generate {totalVideos > 1 ? `${totalVideos} Videos` : 'Video'}</>
             )}
           </Button>
 
+          {/* Generation log */}
           <div className="rounded-xl border border-border overflow-hidden bg-card">
             <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -844,9 +936,9 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
               )}
             </div>
             {jobs.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-14 px-6 text-center">
-                <div className="w-12 h-12 rounded-full bg-secondary/50 flex items-center justify-center mb-3">
-                  <Play className="w-5 h-5 text-muted-foreground/50" />
+              <div className="flex flex-col items-center justify-center py-10 px-6 text-center">
+                <div className="w-10 h-10 rounded-full bg-secondary/50 flex items-center justify-center mb-3">
+                  <Play className="w-4 h-4 text-muted-foreground/50" />
                 </div>
                 <p className="text-sm font-medium text-muted-foreground">Ready to generate</p>
                 <p className="text-xs text-muted-foreground/60 mt-1">
@@ -854,11 +946,15 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                 </p>
               </div>
             ) : (
-              <div className="p-3 space-y-3 max-h-[calc(100vh-220px)] overflow-y-auto">
+              <div className="p-3 space-y-3 max-h-96 overflow-y-auto">
                 {jobs.map(j => <JobStatus key={j.id} job={j} />)}
               </div>
             )}
           </div>
+
+          {fileLightboxSrc && (
+            <MediaLightbox src={fileLightboxSrc} onClose={() => setFileLightboxSrc(null)} />
+          )}
 
         </div>{/* end COL 3 */}
 
@@ -1185,22 +1281,29 @@ function AudioClip({ audioSrc, audioRef, duration, start, end, onStartChange, on
   );
 }
 
-function BatchFileGridCell({ name, src, isVideo, selected, locked, onToggle, onPreview }) {
+function BatchFileGridCell({ name, src, isVideo, selected, onToggle, onPreview }) {
   const [hovered, setHovered] = useState(false);
-  const videoRef = useRef(null);
+  const videoRef      = useRef(null);
+  const playPromise   = useRef(null);
 
   const handleMouseEnter = () => {
     setHovered(true);
     if (isVideo && videoRef.current) {
       videoRef.current.currentTime = 0;
-      videoRef.current.play().catch(() => {});
+      playPromise.current = videoRef.current.play().catch(() => {});
     }
   };
   const handleMouseLeave = () => {
     setHovered(false);
     if (isVideo && videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = 0;
+      const v = videoRef.current;
+      if (playPromise.current) {
+        playPromise.current.then(() => { v.pause(); v.currentTime = 0; }).catch(() => {});
+        playPromise.current = null;
+      } else {
+        v.pause();
+        v.currentTime = 0;
+      }
     }
   };
 
@@ -1208,8 +1311,7 @@ function BatchFileGridCell({ name, src, isVideo, selected, locked, onToggle, onP
     <div
       className={cn(
         "relative rounded-lg overflow-hidden border-2 cursor-pointer transition-all",
-        selected ? "border-primary" : "border-border",
-        locked && "opacity-60 cursor-not-allowed"
+        selected ? "border-primary" : "border-border"
       )}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
@@ -1248,7 +1350,7 @@ function BatchFileGridCell({ name, src, isVideo, selected, locked, onToggle, onP
   );
 }
 
-function FileToggle({ name, selected, onToggle, color, locked }) {
+function FileToggle({ name, selected, onToggle, color }) {
   const colorMap = {
     blue: 'border-blue-500/40 bg-blue-500/10 text-blue-300',
     purple: 'border-purple-500/40 bg-purple-500/10 text-purple-300',
@@ -1256,11 +1358,9 @@ function FileToggle({ name, selected, onToggle, color, locked }) {
   return (
     <button
       onClick={onToggle}
-      disabled={locked}
       className={cn(
         "flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-all text-left w-full",
-        selected ? colorMap[color] : "border-border bg-transparent text-muted-foreground hover:border-border/80",
-        locked && "opacity-60 cursor-not-allowed"
+        selected ? colorMap[color] : "border-border bg-transparent text-muted-foreground hover:border-border/80"
       )}
     >
       <div className={cn("w-3.5 h-3.5 rounded-sm border flex items-center justify-center flex-shrink-0",

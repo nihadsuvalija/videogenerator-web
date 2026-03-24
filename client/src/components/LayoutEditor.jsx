@@ -1,7 +1,8 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Move, Image, Type, Upload, Trash2, RefreshCw, Check,
-  Eye, EyeOff, Lock, Unlock, Plus, X, ChevronDown
+  Eye, EyeOff, Lock, Unlock, Plus, X, ChevronDown,
+  AlignLeft, AlignCenter, AlignRight, Bold,
 } from 'lucide-react';
 import FontPicker from './FontPicker';
 import { Button } from './ui-button';
@@ -19,11 +20,11 @@ const ASPECT_RATIOS = {
   '2160x3840': 9 / 16,
 };
 
-const CANVAS_W = 640; // display width in px
+const CANVAS_W = 640; // default display width in px
 
-function getCanvasH(resolution) {
+function getCanvasH(resolution, cw = CANVAS_W) {
   const ratio = ASPECT_RATIOS[resolution] || (16 / 9);
-  return Math.round(CANVAS_W / ratio);
+  return Math.round(cw / ratio);
 }
 
 // Element types rendered on canvas
@@ -31,10 +32,27 @@ function getCanvasH(resolution) {
 // x, y: 0-100% of canvas (center point)
 // w: 0-100% of canvas width
 
-export default function LayoutEditor({ preset, onLayoutChange, onFontChange }) {
+export default function LayoutEditor({ preset, onLayoutChange, onFontChange, previewBgUrl, previewBgIsVideo, stacked = false, locked = false }) {
   const resolution = preset?.resolution || '1920x1080';
   const layout     = preset?.layout || {};
-  const canvasH    = getCanvasH(resolution);
+
+  // In stacked mode the canvas fills its container; otherwise fixed CANVAS_W
+  const outerRef  = useRef();
+  const [canvasW, setCanvasW] = useState(CANVAS_W);
+  useEffect(() => {
+    if (!stacked) { setCanvasW(CANVAS_W); return; }
+    const el = outerRef.current;
+    if (!el) return;
+    if (el.offsetWidth > 40) setCanvasW(el.offsetWidth);
+    const ro = new ResizeObserver(entries => {
+      const w = Math.floor(entries[0].contentRect.width);
+      if (w > 40) setCanvasW(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [stacked]);
+
+  const canvasH = getCanvasH(resolution, canvasW);
 
   // Local element state derived from preset layout
   const [elements, setElements]       = useState(() => buildElements(layout, preset));
@@ -93,6 +111,7 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange }) {
     e.preventDefault();
     e.stopPropagation();
     setSelected(id);
+    if (locked) return;
     const el = elements.find(x => x.id === id);
     if (!el || el.locked) return;
     if (mode === 'drag') {
@@ -104,18 +123,18 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange }) {
 
   const onMouseMove = useCallback((e) => {
     if (dragging) {
-      const dxPct = ((e.clientX - dragging.startMouseX) / CANVAS_W) * 100;
+      const dxPct = ((e.clientX - dragging.startMouseX) / canvasW) * 100;
       const dyPct = ((e.clientY - dragging.startMouseY) / canvasH) * 100;
       const newX = Math.max(0, Math.min(100, dragging.startX + dxPct));
       const newY = Math.max(0, Math.min(100, dragging.startY + dyPct));
       updateElement(dragging.id, { x: parseFloat(newX.toFixed(2)), y: parseFloat(newY.toFixed(2)) });
     }
     if (resizing) {
-      const dxPct = ((e.clientX - resizing.startMouseX) / CANVAS_W) * 100;
+      const dxPct = ((e.clientX - resizing.startMouseX) / canvasW) * 100;
       const newW = Math.max(5, Math.min(80, resizing.startW + dxPct));
       updateElement(resizing.id, { w: parseFloat(newW.toFixed(2)) });
     }
-  }, [dragging, resizing, canvasH, updateElement]);
+  }, [dragging, resizing, canvasW, canvasH, updateElement]);
 
   const onMouseUp = useCallback(() => {
     setDragging(null);
@@ -174,18 +193,18 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange }) {
   const selectedEl = elements.find(el => el.id === selected);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" ref={outerRef}>
       {/* Toolbar */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Badge variant="secondary" className="mono text-xs">{resolution}</Badge>
-          <span className="text-xs text-muted-foreground">Drag elements to reposition · Drag handle to resize</span>
+          <span className="text-xs text-muted-foreground">Drag to reposition · Handle to resize</span>
         </div>
         <div className="flex items-center gap-2">
           <Button
             variant="outline" size="sm"
             onClick={() => fileInputRef.current?.click()}
-            disabled={uploadingOverlay || !preset}
+            disabled={uploadingOverlay || !preset || locked}
           >
             {uploadingOverlay
               ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -203,19 +222,39 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange }) {
         </div>
       </div>
 
-      <div className="flex gap-4">
+      <div className={stacked ? 'space-y-3' : 'flex gap-4'}>
         {/* Canvas */}
         <div
           ref={canvasRef}
-          className="relative flex-shrink-0 rounded-lg overflow-hidden border border-border bg-black select-none"
-          style={{ width: CANVAS_W, height: canvasH }}
+          className={cn(
+            "relative rounded-lg overflow-hidden border border-border bg-black select-none",
+            stacked ? "w-full flex-shrink-0" : "flex-shrink-0"
+          )}
+          style={{ width: stacked ? canvasW : CANVAS_W, height: canvasH }}
           onClick={() => setSelected(null)}
         >
+          {/* Background preview */}
+          {previewBgUrl && previewBgIsVideo && (
+            <video
+              key={previewBgUrl}
+              src={previewBgUrl}
+              className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+              muted autoPlay loop playsInline
+            />
+          )}
+          {previewBgUrl && !previewBgIsVideo && (
+            <img
+              src={previewBgUrl}
+              alt=""
+              className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+            />
+          )}
+
           {/* Grid overlay */}
           <div className="absolute inset-0 pointer-events-none opacity-10"
             style={{
               backgroundImage: 'linear-gradient(rgba(255,255,255,.3) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.3) 1px, transparent 1px)',
-              backgroundSize: `${CANVAS_W / 6}px ${canvasH / 6}px`,
+              backgroundSize: `${canvasW / 6}px ${canvasH / 6}px`,
             }}
           />
           {/* Center crosshair */}
@@ -237,7 +276,7 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange }) {
             <CanvasElement
               key={el.id}
               el={el}
-              canvasW={CANVAS_W}
+              canvasW={canvasW}
               canvasH={canvasH}
               selected={selected === el.id}
               onMouseDown={onMouseDown}
@@ -246,71 +285,145 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange }) {
         </div>
 
         {/* Side panel */}
-        <div className="flex-1 space-y-3 min-w-0">
-          {/* Background dim control */}
-          <div className="rounded-lg border border-border bg-secondary/30 p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs text-muted-foreground uppercase tracking-widest">Background Dim</Label>
-              <span className="text-xs font-mono text-foreground">{Math.round(dimBackground * 100)}%</span>
+        {stacked ? (
+          /* Stacked mode: 2-column grid — left: dim+list, right: selected controls */
+          <div className="grid grid-cols-2 gap-3 min-w-0">
+            <div className="space-y-3">
+              <SidePanelDim dimBackground={dimBackground} onDimChange={handleDimChange} locked={locked} />
+              <SidePanelList elements={elements} selected={selected} setSelected={setSelected} updateElement={updateElement} removeOverlayEl={removeOverlayEl} locked={locked} />
             </div>
-            <input
-              type="range"
-              min="0" max="1" step="0.01"
-              value={dimBackground}
-              onChange={e => handleDimChange(parseFloat(e.target.value))}
-              className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-primary bg-border"
-            />
-            <p className="text-xs text-muted-foreground">Darkens the video so text and logo stand out</p>
-          </div>
-
-          {/* Element list */}
-          <div className="space-y-1">
-            {elements.map(el => (
-              <ElementRow
-                key={el.id}
-                el={el}
-                selected={selected === el.id}
-                onSelect={() => setSelected(el.id)}
-                onToggleVisible={() => updateElement(el.id, { visible: !(el.visible !== false) })}
-                onToggleLock={() => updateElement(el.id, { locked: !el.locked })}
-                onRemove={el.type === 'overlay' ? () => removeOverlayEl(el) : null}
-              />
-            ))}
-          </div>
-
-          {/* Selected element controls */}
-          {selectedEl && (
-            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-3 slide-up">
-              <p className="text-xs font-semibold text-primary">{selectedEl.label}</p>
-
-              <div className="grid grid-cols-2 gap-2">
-                <NumInput label="X %" value={selectedEl.x}
-                  onChange={v => updateElement(selectedEl.id, { x: v })} min={0} max={100} />
-                <NumInput label="Y %" value={selectedEl.y}
-                  onChange={v => updateElement(selectedEl.id, { y: v })} min={0} max={100} />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <NumInput label="Width %" value={selectedEl.w}
-                  onChange={v => updateElement(selectedEl.id, { w: v })} min={5} max={80} />
-                {selectedEl.type === 'subtitle' && (
-                  <NumInput label="Font size (px)" value={selectedEl.fontSize || 52}
-                    onChange={v => updateElement(selectedEl.id, { fontSize: v })} min={12} max={300} />
-                )}
-              </div>
-              {selectedEl.type === 'subtitle' && (
-                <div className="space-y-1.5">
-                  <p className="text-xs text-muted-foreground">Font family</p>
-                  <FontPicker
-                    value={fontFamily}
-                    onChange={handleFontFamilyChange}
-                    previewText="The quick brown fox jumps"
-                  />
-                </div>
+            <div>
+              {selectedEl && (
+                <SidePanelControls
+                  selectedEl={selectedEl}
+                  updateElement={updateElement}
+                  fontFamily={fontFamily}
+                  handleFontFamilyChange={handleFontFamilyChange}
+                  locked={locked}
+                />
               )}
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          /* Horizontal mode: side panel to the right of canvas */
+          <div className="flex-1 space-y-3 min-w-0">
+            <SidePanelDim dimBackground={dimBackground} onDimChange={handleDimChange} locked={locked} />
+            <SidePanelList elements={elements} selected={selected} setSelected={setSelected} updateElement={updateElement} removeOverlayEl={removeOverlayEl} locked={locked} />
+            {selectedEl && (
+              <SidePanelControls
+                selectedEl={selectedEl}
+                updateElement={updateElement}
+                fontFamily={fontFamily}
+                handleFontFamilyChange={handleFontFamilyChange}
+                locked={locked}
+              />
+            )}
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+function SidePanelDim({ dimBackground, onDimChange, locked }) {
+  return (
+    <div className="rounded-lg border border-border bg-secondary/30 p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <Label className="text-xs text-muted-foreground uppercase tracking-widest">Background Dim</Label>
+        <span className="text-xs font-mono text-foreground">{Math.round(dimBackground * 100)}%</span>
+      </div>
+      <input
+        type="range"
+        min="0" max="1" step="0.01"
+        value={dimBackground}
+        onChange={e => !locked && onDimChange(parseFloat(e.target.value))}
+        disabled={locked}
+        className={cn("w-full h-1.5 rounded-full appearance-none accent-primary bg-border", locked ? "cursor-not-allowed opacity-50" : "cursor-pointer")}
+      />
+    </div>
+  );
+}
+
+function SidePanelList({ elements, selected, setSelected, updateElement, removeOverlayEl, locked }) {
+  return (
+    <div className="space-y-1">
+      {elements.map(el => (
+        <ElementRow
+          key={el.id}
+          el={el}
+          selected={selected === el.id}
+          onSelect={() => setSelected(el.id)}
+          onToggleVisible={() => !locked && updateElement(el.id, { visible: !(el.visible !== false) })}
+          onToggleLock={() => !locked && updateElement(el.id, { locked: !el.locked })}
+          onRemove={el.type === 'overlay' && !locked ? () => removeOverlayEl(el) : null}
+          presetLocked={locked}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SidePanelControls({ selectedEl, updateElement, fontFamily, handleFontFamilyChange, locked }) {
+  return (
+    <div className={cn("rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-3 slide-up", locked && "opacity-60")}>
+      <p className="text-xs font-semibold text-primary">{selectedEl.label}</p>
+
+      <div className="grid grid-cols-2 gap-2">
+        <NumInput label="X %" value={selectedEl.x}
+          onChange={v => updateElement(selectedEl.id, { x: v })} min={0} max={100} disabled={locked} />
+        <NumInput label="Y %" value={selectedEl.y}
+          onChange={v => updateElement(selectedEl.id, { y: v })} min={0} max={100} disabled={locked} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <NumInput label="Width %" value={selectedEl.w}
+          onChange={v => updateElement(selectedEl.id, { w: v })} min={5} max={80} disabled={locked} />
+        {selectedEl.type === 'subtitle' && (
+          <NumInput label="Font size (px)" value={selectedEl.fontSize || 52}
+            onChange={v => updateElement(selectedEl.id, { fontSize: v })} min={12} max={300} disabled={locked} />
+        )}
+      </div>
+      {selectedEl.type === 'subtitle' && (
+        <>
+          <div className="space-y-1.5">
+            <p className="text-xs text-muted-foreground">Font family</p>
+            <FontPicker
+              value={fontFamily}
+              onChange={handleFontFamilyChange}
+              previewText="The quick brown fox jumps"
+              disabled={locked}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs text-muted-foreground">Text alignment</p>
+            <div className="flex gap-1">
+              {[
+                { id: 'left',   Icon: AlignLeft },
+                { id: 'center', Icon: AlignCenter },
+                { id: 'right',  Icon: AlignRight },
+              ].map(({ id, Icon }) => (
+                <button key={id} disabled={locked}
+                  onClick={() => !locked && updateElement(selectedEl.id, { textAlign: id })}
+                  className={cn('flex-1 flex items-center justify-center py-1.5 rounded border transition-all',
+                    (selectedEl.textAlign || 'center') === id
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border hover:bg-secondary/50',
+                    locked && 'cursor-not-allowed')}>
+                  <Icon className="w-3.5 h-3.5" />
+                </button>
+              ))}
+            </div>
+          </div>
+          <button disabled={locked}
+            onClick={() => !locked && updateElement(selectedEl.id, { textBold: !selectedEl.textBold })}
+            className={cn('flex items-center justify-center gap-2 w-full py-1.5 rounded border text-xs transition-all',
+              selectedEl.textBold
+                ? 'border-primary bg-primary/10 text-primary font-semibold'
+                : 'border-border hover:bg-secondary/50',
+              locked && 'cursor-not-allowed')}>
+            <Bold className="w-3.5 h-3.5" /> Bold
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -349,8 +462,15 @@ function CanvasElement({ el, canvasW, canvasH, selected, onMouseDown }) {
         </div>
       )}
       {el.type === 'subtitle' && (
-        <div className="w-full h-full flex items-center justify-center bg-black/50 rounded px-2">
-          <span className="text-white text-xs font-bold truncate" style={{ fontSize: Math.max(8, (el.fontSize || 52) * (canvasW / 1920)) }}>
+        <div className="w-full h-full flex items-center bg-black/50 rounded px-2"
+          style={{ justifyContent: el.textAlign === 'left' ? 'flex-start' : el.textAlign === 'right' ? 'flex-end' : 'center' }}>
+          <span className="text-white truncate"
+            style={{
+              fontSize: Math.max(8, (el.fontSize || 52) * (canvasW / 1920)),
+              fontWeight: el.textBold ? 700 : 400,
+              textAlign: el.textAlign || 'center',
+              textShadow: '1px 1px 3px black',
+            }}>
             Subtitle text here
           </span>
         </div>
@@ -417,13 +537,14 @@ function ElementRow({ el, selected, onSelect, onToggleVisible, onToggleLock, onR
   );
 }
 
-function NumInput({ label, value, onChange, min, max }) {
+function NumInput({ label, value, onChange, min, max, disabled }) {
   return (
     <div className="space-y-1">
       <Label className="text-xs text-muted-foreground">{label}</Label>
       <input
         type="number"
         min={min} max={max} step="0.5"
+        disabled={disabled}
         value={Math.round(value * 10) / 10}
         onChange={e => onChange(Math.max(min, Math.min(max, parseFloat(e.target.value) || 0)))}
         className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
@@ -451,15 +572,17 @@ function buildElements(layout, preset) {
 
   // Subtitle element
   elements.push({
-    id:       'subtitle',
-    type:     'subtitle',
-    label:    'Subtitles / Text',
-    x:        layout?.subtitles?.x        ?? 50,
-    y:        layout?.subtitles?.y        ?? 50,
-    w:        layout?.subtitles?.w        ?? 60,
-    fontSize: layout?.subtitles?.fontSize ?? 52,
-    locked:   false,
-    visible:  layout?.subtitles?.enabled !== false,
+    id:        'subtitle',
+    type:      'subtitle',
+    label:     'Subtitles / Text',
+    x:         layout?.subtitles?.x         ?? 50,
+    y:         layout?.subtitles?.y         ?? 50,
+    w:         layout?.subtitles?.w         ?? 60,
+    fontSize:  layout?.subtitles?.fontSize  ?? 52,
+    textAlign: layout?.subtitles?.textAlign ?? 'center',
+    textBold:  layout?.subtitles?.textBold  ?? false,
+    locked:    false,
+    visible:   layout?.subtitles?.enabled !== false,
   });
 
   // Static image overlays from preset
@@ -505,11 +628,13 @@ function elementsToLayout(elements, preset, dimBackground = 0) {
         enabled: logo?.visible !== false,
       },
       subtitles: {
-        x:        subtitle?.x        ?? 50,
-        y:        subtitle?.y        ?? 50,
-        w:        subtitle?.w        ?? 60,
-        fontSize: subtitle?.fontSize ?? 52,
-        enabled:  subtitle?.visible !== false,
+        x:         subtitle?.x         ?? 50,
+        y:         subtitle?.y         ?? 50,
+        w:         subtitle?.w         ?? 60,
+        fontSize:  subtitle?.fontSize  ?? 52,
+        textAlign: subtitle?.textAlign ?? 'center',
+        textBold:  subtitle?.textBold  ?? false,
+        enabled:   subtitle?.visible !== false,
       },
       overlays,
       dimBackground: parseFloat(dimBackground.toFixed(2)),

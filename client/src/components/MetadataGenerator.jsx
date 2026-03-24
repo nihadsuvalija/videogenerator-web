@@ -59,7 +59,7 @@ const ALL_PLATFORMS = [
       tag:     'bg-pink-500/10 border-pink-500/20 text-pink-300 hover:bg-pink-500/20',
       hashtag: 'bg-pink-500/10 border-pink-500/20 text-pink-300 hover:bg-pink-500/20',
     },
-    orientations: ['vertical'],
+    orientations: ['vertical', 'horizontal'],
     fields: ['title', 'caption', 'hashtags'],
   },
   {
@@ -71,7 +71,7 @@ const ALL_PLATFORMS = [
       tag:     'bg-cyan-500/10 border-cyan-500/20 text-cyan-300 hover:bg-cyan-500/20',
       hashtag: 'bg-cyan-500/10 border-cyan-500/20 text-cyan-300 hover:bg-cyan-500/20',
     },
-    orientations: ['vertical'],
+    orientations: ['vertical', 'horizontal'],
     fields: ['title', 'caption', 'hashtags'],
   },
 ];
