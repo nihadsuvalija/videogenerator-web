@@ -61,10 +61,14 @@ export function AuthProvider({ children }) {
     setUser(null);
   }, []);
 
+  const updateUser = useCallback((patch) => {
+    setUser(prev => ({ ...prev, ...patch }));
+  }, []);
+
   const token = localStorage.getItem('vg_token');
 
   return (
-    <AuthContext.Provider value={{ user, loading, token, register, login, loginWithGoogle, logout }}>
+    <AuthContext.Provider value={{ user, loading, token, register, login, loginWithGoogle, logout, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

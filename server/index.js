@@ -133,6 +133,7 @@ const UserSchema = new mongoose.Schema({
   password:  { type: String },  // null for Google-only accounts
   googleId:  { type: String },
   avatar:    { type: String },
+  plan:      { type: String, enum: ['free', 'starter', 'pro', 'custom'], default: 'free' },
   createdAt: { type: Date, default: Date.now },
 });
 const User = mongoose.model('User', UserSchema);
@@ -163,7 +164,7 @@ app.post('/api/auth/register', async (req, res) => {
     const hash = await bcrypt.hash(password, 12);
     const user = await User.create({ name: name.trim(), email: email.toLowerCase().trim(), password: hash });
     const token = signToken(user);
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar } });
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, hasPassword: true, plan: user.plan || 'free', createdAt: user.createdAt } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -176,7 +177,7 @@ app.post('/api/auth/login', async (req, res) => {
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) return res.status(400).json({ error: 'Invalid email or password' });
     const token = signToken(user);
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar } });
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, hasPassword: !!user.password, plan: user.plan || 'free', createdAt: user.createdAt } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -204,13 +205,45 @@ app.post('/api/auth/google', async (req, res) => {
       }
     }
     const token = signToken(user);
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar } });
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, hasPassword: !!user.password, plan: user.plan || 'free', createdAt: user.createdAt } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/auth/me', requireAuth, (req, res) => {
   const u = req.user;
-  res.json({ id: u.id, name: u.name, email: u.email, avatar: u.avatar });
+  res.json({ id: u.id, name: u.name, email: u.email, avatar: u.avatar, hasPassword: !!u.password, plan: u.plan || 'free', createdAt: u.createdAt });
+});
+
+app.put('/api/auth/profile', requireAuth, async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'Name is required' });
+    await User.updateOne({ id: req.user.id }, { name: name.trim() });
+    res.json({ name: name.trim() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/auth/password', requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!req.user.password) return res.status(400).json({ error: 'No password set on this account' });
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current and new password are required' });
+    if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    const ok = await bcrypt.compare(currentPassword, req.user.password);
+    if (!ok) return res.status(400).json({ error: 'Current password is incorrect' });
+    const hash = await bcrypt.hash(newPassword, 12);
+    await User.updateOne({ id: req.user.id }, { password: hash });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/auth/plan', requireAuth, async (req, res) => {
+  try {
+    const { plan } = req.body;
+    if (!['free', 'starter', 'pro', 'custom'].includes(plan)) return res.status(400).json({ error: 'Invalid plan' });
+    await User.updateOne({ id: req.user.id }, { plan });
+    res.json({ plan });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 const PresetSchema = new mongoose.Schema({

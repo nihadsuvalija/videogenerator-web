@@ -350,7 +350,7 @@ function LoadingCard({ job }) {
         <div className="absolute top-2 left-2">
           <span className={cn(
             "text-xs font-semibold px-2 py-0.5 rounded-full",
-            job.type === 'post' ? "bg-purple-500/80 text-white" : "bg-primary/80 text-primary-foreground"
+            job.type === 'post' ? "bg-primary/60 text-primary-foreground" : "bg-primary/80 text-primary-foreground"
           )}>
             {job.type === 'post' ? 'Post' : 'Video'}
           </span>
@@ -514,7 +514,7 @@ function JobCard({ job, onReplicate, onDetails }) {
         <div className="absolute top-2 left-2">
           <span className={cn(
             "text-xs font-semibold px-2 py-0.5 rounded-full",
-            job.type === 'post' ? "bg-purple-500/80 text-white" : "bg-primary/80 text-primary-foreground"
+            job.type === 'post' ? "bg-primary/60 text-primary-foreground" : "bg-primary/80 text-primary-foreground"
           )}>
             {job.type === 'post' ? 'Post' : 'Video'}
           </span>
@@ -624,7 +624,7 @@ function JobDetailsModal({ job, onClose }) {
               <h2 className="text-base font-bold mono">{job.batchName}</h2>
               <span className={cn(
                 "text-xs font-semibold px-2 py-0.5 rounded-full",
-                job.type === 'post' ? "bg-purple-500/20 text-purple-300 border border-purple-500/30" : "bg-primary/20 text-primary border border-primary/30"
+                job.type === 'post' ? "bg-primary/15 text-primary border border-primary/25" : "bg-primary/20 text-primary border border-primary/30"
               )}>
                 {job.type === 'post' ? 'Post' : 'Video'}
               </span>
