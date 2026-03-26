@@ -10,6 +10,7 @@ import {
   Input, Label, Badge, Separator
 } from './ui-primitives';
 import LayoutEditor from './LayoutEditor';
+import FilterPicker from './FilterPicker';
 import { cn } from '../lib/utils';
 
 const API = 'http://localhost:5001';
@@ -397,6 +398,17 @@ function PresetCard({ preset, expanded, onToggle, onUpdate, onDelete, onDuplicat
                     onUpload={onLogoUpload}
                     onDelete={onLogoDelete}
                     locked={preset.locked}
+                  />
+                </Section>
+
+                <Separator />
+
+                {/* Color Filter */}
+                <Section title="Color Filter">
+                  <FilterPicker
+                    value={preset.imageFilter || 'none'}
+                    onChange={v => debouncedUpdate('imageFilter', v)}
+                    disabled={preset.locked}
                   />
                 </Section>
 

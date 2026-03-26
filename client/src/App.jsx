@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Clapperboard, History, Zap, Sliders,
-  FolderOpen, ImagePlus, Home, LogOut, Sparkles, UserCircle, CreditCard,
+  FolderOpen, ImagePlus, Home, LogOut, Sparkles, UserCircle, CreditCard, BookOpen, Music,
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
 import AuthPage from './components/AuthPage';
@@ -14,6 +14,8 @@ import PresetsPanel from './components/PresetsPanel';
 import MetadataGenerator from './components/MetadataGenerator';
 import ProfilePanel from './components/ProfilePanel';
 import PricingPanel from './components/PricingPanel';
+import QuotesPanel from './components/QuotesPanel';
+import AudioBatchesPanel from './components/AudioBatchesPanel';
 import Toast from './components/Toast';
 import { cn } from './lib/utils';
 
@@ -33,7 +35,7 @@ export default function App() {
   const tabRefs                                     = useRef({});
 
   // ── Hash-based tab routing so browser Back/Forward works ──────────────────
-  const VALID_TABS = ['home','generate','posts','metadata','batches','presets','history','profile','pricing'];
+  const VALID_TABS = ['home','generate','posts','metadata','batches','presets','history','profile','pricing','quotes','audio'];
   const getTabFromHash = () => {
     const hash = window.location.hash.replace('#', '');
     return VALID_TABS.includes(hash) ? hash : 'home';
@@ -143,11 +145,13 @@ export default function App() {
     { id: 'home',     icon: <Home className="w-4 h-4" />,      label: 'Home' },
     { id: 'generate', icon: <Zap className="w-4 h-4" />,       label: 'Video' },
     { id: 'posts',    icon: <ImagePlus className="w-4 h-4" />,  label: 'Posts' },
+    { id: 'quotes',   icon: <BookOpen className="w-4 h-4" />,  label: 'Quotes' },
     { id: 'metadata', icon: <Sparkles className="w-4 h-4" />,  label: 'Metadata' },
   ];
 
   const utilityTabs = [
     { id: 'batches',  icon: <FolderOpen className="w-4 h-4" />, label: 'Batches' },
+    { id: 'audio',    icon: <Music className="w-4 h-4" />,      label: 'Audio' },
     { id: 'presets',  icon: <Sliders className="w-4 h-4" />,    label: 'Presets' },
     { id: 'history',  icon: <History className="w-4 h-4" />,    label: 'History' },
   ];
@@ -274,6 +278,13 @@ export default function App() {
             />
           </div>
 
+          <div ref={el => tabRefs.current['quotes'] = el} style={{ display: activeTab === 'quotes' ? '' : 'none' }}>
+            <div className="max-w-2xl mx-auto">
+              <SectionHeader icon={<BookOpen className="w-4 h-4 text-primary" />} label="Quotes" />
+              <QuotesPanel />
+            </div>
+          </div>
+
           <div ref={el => tabRefs.current['metadata'] = el} style={{ display: activeTab === 'metadata' ? '' : 'none' }}>
             <div className="max-w-4xl mx-auto">
               <SectionHeader icon={<Sparkles className="w-4 h-4 text-primary" />} label="Metadata" />
@@ -291,6 +302,13 @@ export default function App() {
                 selectedBatch={selectedBatch}
                 onFilesChanged={handleFilesChanged}
               />
+            </div>
+          </div>
+
+          <div ref={el => tabRefs.current['audio'] = el} style={{ display: activeTab === 'audio' ? '' : 'none' }}>
+            <div className="max-w-3xl mx-auto">
+              <SectionHeader icon={<Music className="w-4 h-4 text-primary" />} label="Audio Batches" />
+              <AudioBatchesPanel />
             </div>
           </div>
 

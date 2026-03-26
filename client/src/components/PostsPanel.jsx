@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useAuth } from '../context/AuthContext';
 import {
   ImagePlus, Play, RefreshCw, Check, AlertCircle, Download,
   Lock, Sliders, X, FileText,
-  Image, Trash2, Upload, Hash, Type, Sparkles, LayoutGrid, List, Eye, StopCircle,
+  Image, Film, Trash2, Upload, Hash, Type, Sparkles, LayoutGrid, List, Eye, StopCircle, BookOpen,
 } from 'lucide-react';
 import FontPicker from './FontPicker';
+import FilterPicker from './FilterPicker';
 import { Button } from './ui-button';
 import {
   Card, CardContent, CardHeader, CardTitle, CardDescription,
@@ -37,11 +39,18 @@ const DEFAULT_POST_LAYOUT = {
 };
 
 export default function PostsPanel({ batches, incomingPreset, onClearIncomingPreset, presets = [], onPresetsChanged }) {
+  const { token } = useAuth();
   const [activePreset, setActivePreset] = useState(null);
+  const [quotesMode, setQuotesMode]         = useState('manual');
+  const [libraryQuotes, setLibraryQuotes]   = useState([]);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryBatch, setLibraryBatch]     = useState(null);
+  const [quoteBatches, setQuoteBatches]     = useState([]);
 
   const [selectedBatch, setSelectedBatch]   = useState(null);
   const [batchFiles, setBatchFiles]         = useState({ videos: [], images: [] });
   const [selectedImages, setSelectedImages] = useState([]);
+  const [selectedVideos, setSelectedVideos] = useState([]);
   const [fileViewMode, setFileViewMode]       = useState('grid');
   const [fileLightboxSrc, setFileLightboxSrc] = useState(null);
   const [showBatchPicker, setShowBatchPicker] = useState(false);
@@ -54,6 +63,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
   const [textMaxChars, setTextMaxChars] = useState(25);
   const [fontFamily, setFontFamily]     = useState('default');
   const [fontSize, setFontSize]         = useState('64');
+  const [imageFilter, setImageFilter]   = useState('none');
 
   const [localLayouts, setLocalLayouts]       = useState({ '1080x1080': DEFAULT_POST_LAYOUT });
   const [activeLayoutRes, setActiveLayoutRes] = useState('1080x1080');
@@ -71,7 +81,14 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
     if (!selectedBatch) return;
     fetch(`${API}/api/batches/${selectedBatch}/files`)
       .then(r => r.json())
-      .then(data => { setBatchFiles(data); setSelectedImages(data.images); })
+      .then(data => {
+        setBatchFiles(data);
+        const bt = data.videos.length > 0 && data.images.length === 0 ? 'video'
+          : data.images.length > 0 && data.videos.length === 0 ? 'image'
+          : null;
+        if (bt === 'video') { setSelectedVideos(data.videos); setSelectedImages([]); }
+        else { setSelectedImages(data.images); setSelectedVideos([]); }
+      })
       .catch(() => {});
   }, [selectedBatch]);
 
@@ -88,7 +105,8 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
       setResolutionCounts({ [key]: preset.videoCount || 10 });
     }
     setTextMaxChars(preset.textMaxChars ?? 25);
-    if (preset.fontFamily) setFontFamily(preset.fontFamily);
+    if (preset.fontFamily)  setFontFamily(preset.fontFamily);
+    if (preset.imageFilter) setImageFilter(preset.imageFilter);
     if (preset.layout?.subtitles?.fontSize) setFontSize(String(preset.layout.subtitles.fontSize));
     if (preset.layout) {
       let resKeys;
@@ -167,6 +185,31 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
   const quoteLines = quotes.split('\n').map(q => q.trim()).filter(Boolean);
   const totalPosts = selectedResolutions.reduce((s, r) => s + (resolutionCounts[r] ?? 1), 0);
 
+  const loadLibraryQuotes = useCallback(async (batchId = null) => {
+    setLibraryLoading(true);
+    try {
+      const url = batchId ? `${API}/api/quotes?batchId=${batchId}` : `${API}/api/quotes`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const all = await res.json();
+      setLibraryQuotes(all.filter(q => q.enabled));
+    } catch {}
+    finally { setLibraryLoading(false); }
+  }, [token]);
+
+  const switchLibraryBatch = (batchId) => {
+    setLibraryBatch(batchId);
+    loadLibraryQuotes(batchId);
+  };
+
+  const switchQuotesMode = (mode) => {
+    setQuotesMode(mode);
+    if (mode === 'library') {
+      fetch(`${API}/api/quote-batches`, { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.json()).then(setQuoteBatches).catch(() => {});
+      loadLibraryQuotes(libraryBatch);
+    }
+  };
+
   const toggleResolution = (key) => {
     setSelectedResolutions(prev => {
       if (prev.includes(key)) {
@@ -193,10 +236,21 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
   };
 
   const generate = async () => {
-    if (!selectedBatch || selectedImages.length === 0) return;
+    if (!selectedBatch || activeFiles.length === 0) return;
     setGenerating(true); setJobs([]); setJobIds([]);
     try {
-      const baseParams = { batchName: selectedBatch, imageFiles: selectedImages, quotes, textMaxChars: Number(textMaxChars) || 25, presetId: activePreset?.id || null, fontFamily, fontSize: Number(fontSize) || 64 };
+      let resolvedQuotes = quotes;
+      let usedQuoteIds = [];
+      if (quotesMode === 'library') {
+        const pool = libraryQuotes.slice(0, totalPosts);
+        resolvedQuotes = pool.map(q => q.text).join('\n');
+        usedQuoteIds = pool.map(q => q.id);
+      }
+
+      const mediaParam = batchType === 'video'
+        ? { videoFiles: selectedVideos }
+        : { imageFiles: selectedImages };
+      const baseParams = { batchName: selectedBatch, ...mediaParam, quotes: resolvedQuotes, textMaxChars: Number(textMaxChars) || 25, presetId: activePreset?.id || null, fontFamily, fontSize: Number(fontSize) || 64, imageFilter };
       const ids = await Promise.all(
         selectedResolutions.map(async (res) => {
           const count = resolutionCounts[res] ?? 1;
@@ -207,10 +261,28 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
         })
       );
       setJobIds(ids);
+
+      if (usedQuoteIds.length > 0) {
+        await fetch(`${API}/api/quotes/mark-used`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ ids: usedQuoteIds }),
+        });
+        setLibraryQuotes(prev => prev.filter(q => !usedQuoteIds.includes(q.id)));
+      }
     } catch { setGenerating(false); }
   };
 
   const locked = activePreset?.locked ?? false;
+
+  // Derive batch type from loaded files
+  const batchType = !selectedBatch ? null
+    : batchFiles.videos.length > 0 && batchFiles.images.length === 0 ? 'video'
+    : batchFiles.images.length > 0 && batchFiles.videos.length === 0 ? 'image'
+    : batchFiles.videos.length > 0 && batchFiles.images.length > 0 ? 'mixed'
+    : null;
+
+  const activeFiles = batchType === 'video' ? selectedVideos : selectedImages;
 
   return (
     <div className="space-y-4">
@@ -255,6 +327,8 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                 previewBgIsVideo={false}
                 stacked
                 locked={locked}
+                previewText={quotesMode === 'library' ? libraryQuotes[0]?.text : quotes.split('\n').find(l => l.trim())}
+                imageFilter={imageFilter}
               />
             </CardContent>
           </Card>
@@ -311,6 +385,19 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
             </CardContent>
           </Card>
 
+          {/* Filter */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <span className="text-base">🎨</span> Color Filter
+              </CardTitle>
+              <CardDescription>Apply a cinematic tint or color grade to the images</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <FilterPicker value={imageFilter} onChange={setImageFilter} disabled={locked} />
+            </CardContent>
+          </Card>
+
           {/* Quotes & Text */}
           <Card>
             <CardHeader className="pb-3">
@@ -320,43 +407,122 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                     <FileText className="w-4 h-4 text-primary" /> Quotes &amp; Text
                     <Badge variant="secondary" className="text-xs">Optional</Badge>
                   </CardTitle>
-                  <CardDescription>One per line — each post gets one quote burned in</CardDescription>
+                  <CardDescription>
+                    {quotesMode === 'library' ? 'Using quotes from your library' : 'One per line — each post gets one quote burned in'}
+                  </CardDescription>
                 </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  {quotes && (
-                    <button onClick={() => setQuotes('')} className="text-muted-foreground hover:text-destructive transition-colors p-1">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                  <Button disabled={generatingQuotes}
-                    onClick={async () => {
-                      setAiQuoteError(null); setGeneratingQuotes(true);
-                      try {
-                        const r = await fetch(`${API}/api/ai/quotes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: totalPosts }) });
-                        const data = await r.json();
-                        if (!r.ok) throw new Error(data.error || 'Unknown error');
-                        setQuotes(data.quotes.join('\n'));
-                      } catch (e) { setAiQuoteError(e.message); } finally { setGeneratingQuotes(false); }
-                    }}
-                    className="h-7 px-2.5 text-xs gap-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white border-0 shadow-md shadow-violet-500/20 disabled:opacity-50">
-                    {generatingQuotes ? <><RefreshCw className="w-3 h-3 animate-spin" /> AI…</> : <><Sparkles className="w-3 h-3" /> AI ({totalPosts})</>}
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => txtInputRef.current?.click()} className="h-7 px-2 text-xs">
-                    <Upload className="w-3 h-3" />
-                  </Button>
-                  <input ref={txtInputRef} type="file" accept=".txt,text/plain" className="hidden"
-                    onChange={e => e.target.files[0] && handleTxtUpload(e.target.files[0])} />
-                </div>
+                {quotesMode === 'manual' && (
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {quotes && (
+                      <button onClick={() => setQuotes('')} className="text-muted-foreground hover:text-destructive transition-colors p-1">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <Button disabled={generatingQuotes}
+                      onClick={async () => {
+                        setAiQuoteError(null); setGeneratingQuotes(true);
+                        try {
+                          const r = await fetch(`${API}/api/ai/quotes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: totalPosts }) });
+                          const data = await r.json();
+                          if (!r.ok) throw new Error(data.error || 'Unknown error');
+                          setQuotes(data.quotes.join('\n'));
+                        } catch (e) { setAiQuoteError(e.message); } finally { setGeneratingQuotes(false); }
+                      }}
+                      className="h-7 px-2.5 text-xs gap-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white border-0 shadow-md shadow-violet-500/20 disabled:opacity-50">
+                      {generatingQuotes ? <><RefreshCw className="w-3 h-3 animate-spin" /> AI…</> : <><Sparkles className="w-3 h-3" /> AI ({totalPosts})</>}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => txtInputRef.current?.click()} className="h-7 px-2 text-xs">
+                      <Upload className="w-3 h-3" />
+                    </Button>
+                    <input ref={txtInputRef} type="file" accept=".txt,text/plain" className="hidden"
+                      onChange={e => e.target.files[0] && handleTxtUpload(e.target.files[0])} />
+                  </div>
+                )}
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
-              {aiQuoteError && <p className="text-xs text-red-400 flex items-center gap-1"><AlertCircle className="w-3 h-3 flex-shrink-0" /> {aiQuoteError}</p>}
-              <textarea value={quotes} onChange={e => setQuotes(e.target.value)}
-                placeholder={"The only way to do great work is to love what you do.\nIn the middle of every difficulty lies opportunity."}
-                rows={4}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y mono disabled:opacity-50" />
-              {quoteLines.length > 0 && (
-                <p className="text-xs text-muted-foreground">{quoteLines.length} quote{quoteLines.length !== 1 ? 's' : ''}</p>
+              {/* Mode toggle */}
+              <div className="flex gap-1.5 bg-secondary rounded-lg p-1">
+                <button onClick={() => switchQuotesMode('manual')}
+                  className={cn("flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-medium transition-all",
+                    quotesMode === 'manual' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                  <FileText className="w-3 h-3" /> Manual
+                </button>
+                <button onClick={() => switchQuotesMode('library')}
+                  className={cn("flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-medium transition-all",
+                    quotesMode === 'library' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                  <BookOpen className="w-3 h-3" /> Quote Library
+                </button>
+              </div>
+
+              {quotesMode === 'manual' ? (
+                <>
+                  {aiQuoteError && <p className="text-xs text-red-400 flex items-center gap-1"><AlertCircle className="w-3 h-3 flex-shrink-0" /> {aiQuoteError}</p>}
+                  <textarea value={quotes} onChange={e => setQuotes(e.target.value)}
+                    placeholder={"The only way to do great work is to love what you do.\nIn the middle of every difficulty lies opportunity."}
+                    rows={4}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y mono disabled:opacity-50" />
+                  {quoteLines.length > 0 && (
+                    <p className="text-xs text-muted-foreground">{quoteLines.length} quote{quoteLines.length !== 1 ? 's' : ''}</p>
+                  )}
+                </>
+              ) : (
+                <div className="space-y-2">
+                  {/* Batch selector */}
+                  {quoteBatches.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      <button onClick={() => switchLibraryBatch(null)}
+                        className={cn("px-2.5 py-1 rounded-md border text-xs font-medium transition-all",
+                          !libraryBatch ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground")}>
+                        All
+                      </button>
+                      {quoteBatches.map(b => (
+                        <button key={b.id} onClick={() => switchLibraryBatch(b.id)}
+                          className={cn("px-2.5 py-1 rounded-md border text-xs font-medium transition-all",
+                            libraryBatch === b.id ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground")}>
+                          {b.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {libraryLoading ? (
+                    <div className="flex items-center justify-center py-6">
+                      <RefreshCw className="w-4 h-4 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : libraryQuotes.length === 0 ? (
+                    <div className="py-5 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
+                      No active quotes in your library.
+                      <br /><span className="text-xs">Add quotes in the Quotes tab.</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs text-muted-foreground">
+                          <span className="font-semibold text-foreground">{libraryQuotes.length}</span> active quote{libraryQuotes.length !== 1 ? 's' : ''} available
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          Will use <span className="font-semibold text-foreground">{Math.min(totalPosts, libraryQuotes.length)}</span> for {totalPosts} post{totalPosts !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                        {libraryQuotes.slice(0, totalPosts).map((q, i) => (
+                          <div key={q.id} className="flex items-start gap-2 px-3 py-2 rounded-md bg-primary/5 border border-primary/20 text-xs">
+                            <span className="text-primary font-mono font-semibold flex-shrink-0 w-4">{i + 1}</span>
+                            <span className="text-muted-foreground mono whitespace-pre-wrap break-words">{q.text}</span>
+                          </div>
+                        ))}
+                        {libraryQuotes.length > totalPosts && (
+                          <p className="text-xs text-muted-foreground/60 text-center pt-1">
+                            +{libraryQuotes.length - totalPosts} more won't be used this run
+                          </p>
+                        )}
+                      </div>
+                      <button onClick={() => loadLibraryQuotes(libraryBatch)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+                        <RefreshCw className="w-3 h-3" /> Refresh
+                      </button>
+                    </>
+                  )}
+                </div>
               )}
               <Separator />
               <div className="space-y-3">
@@ -450,9 +616,12 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
           <Card className={cn(!selectedBatch && "ring-1 ring-primary/40 glow-orange-sm")}>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <Image className="w-4 h-4 text-primary" /> Image Batch
+                {batchType === 'video' ? <Film className="w-4 h-4 text-primary" /> : <Image className="w-4 h-4 text-primary" />}
+                {batchType === 'video' ? 'Video Batch' : 'Image Batch'}
               </CardTitle>
-              <CardDescription>Select a batch containing background images</CardDescription>
+              <CardDescription>
+                {batchType === 'video' ? 'Select a batch containing source videos' : 'Select a batch containing background images'}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               {selectedBatch ? (
@@ -460,12 +629,19 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
                     <span className="font-mono font-semibold text-sm text-primary truncate">{selectedBatch}</span>
-                    {batchFiles.images.length > 0 && <Badge variant="secondary" className="text-xs flex-shrink-0">{batchFiles.images.length} imgs</Badge>}
+                    {batchFiles.videos.length > 0 && <Badge variant="secondary" className="text-xs flex-shrink-0">{batchFiles.videos.length}v</Badge>}
+                    {batchFiles.images.length > 0 && batchType !== 'video' && <Badge variant="secondary" className="text-xs flex-shrink-0">{batchFiles.images.length}i</Badge>}
                   </div>
-                  <button onClick={() => setShowBatchPicker(true)}
-                    className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1 flex-shrink-0 ml-2">
-                    Switch
-                  </button>
+                  <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                    <button onClick={() => setShowBatchPicker(true)}
+                      className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1">
+                      Switch
+                    </button>
+                    <button onClick={() => setSelectedBatch(null)}
+                      className="text-xs text-muted-foreground hover:text-destructive transition-colors border border-border hover:border-destructive/40 rounded-md px-2.5 py-1">
+                      Remove
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -489,19 +665,31 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
             </CardContent>
           </Card>
 
-          {/* Image pool */}
-          {selectedBatch && batchFiles.images.length > 0 && (
+          {/* File pool — shows videos or images based on batch type */}
+          {selectedBatch && (batchFiles.images.length > 0 || batchFiles.videos.length > 0) && (
             <Card>
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm flex items-center gap-2">
-                    <Image className="w-3.5 h-3.5 text-primary" /> Image Pool
+                    {batchType === 'video'
+                      ? <><Film className="w-3.5 h-3.5 text-primary" /> Video Pool</>
+                      : <><Image className="w-3.5 h-3.5 text-primary" /> Image Pool</>}
                   </CardTitle>
                   <div className="flex items-center gap-2">
                     <div className="flex gap-2">
-                      <button onClick={() => setSelectedImages(batchFiles.images)} className="text-xs text-primary hover:underline">All</button>
-                      <span className="text-muted-foreground text-xs">·</span>
-                      <button onClick={() => setSelectedImages([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
+                      {batchType === 'video' ? (
+                        <>
+                          <button onClick={() => setSelectedVideos(batchFiles.videos)} className="text-xs text-primary hover:underline">All</button>
+                          <span className="text-muted-foreground text-xs">·</span>
+                          <button onClick={() => setSelectedVideos([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => setSelectedImages(batchFiles.images)} className="text-xs text-primary hover:underline">All</button>
+                          <span className="text-muted-foreground text-xs">·</span>
+                          <button onClick={() => setSelectedImages([])} className="text-xs text-muted-foreground hover:text-foreground">None</button>
+                        </>
+                      )}
                     </div>
                     <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-1">
                       <button onClick={() => setFileViewMode('list')}
@@ -515,16 +703,52 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                     </div>
                   </div>
                 </div>
-                <CardDescription>{selectedImages.length} of {batchFiles.images.length} selected</CardDescription>
+                <CardDescription>
+                  {batchType === 'video'
+                    ? `${selectedVideos.length} of ${batchFiles.videos.length} selected`
+                    : `${selectedImages.length} of ${batchFiles.images.length} selected`}
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                {fileViewMode === 'list' ? (
+                {batchType === 'video' ? (
+                  fileViewMode === 'list' ? (
+                    <div className="grid gap-1 max-h-40 overflow-y-auto pr-1">
+                      {batchFiles.videos.map(f => (
+                        <button key={f}
+                          onClick={() => setSelectedVideos(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])}
+                          className={cn("flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-all text-left w-full",
+                            selectedVideos.includes(f) ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-transparent text-muted-foreground hover:border-border/80")}>
+                          <div className={cn("w-3.5 h-3.5 rounded-sm border flex items-center justify-center flex-shrink-0",
+                            selectedVideos.includes(f) ? "border-current bg-current/20" : "border-muted-foreground/40")}>
+                            {selectedVideos.includes(f) && <Check className="w-2.5 h-2.5" />}
+                          </div>
+                          <span className="mono truncate">{f}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ columns: '3 80px', columnGap: 6 }}>
+                      {batchFiles.videos.map(f => (
+                        <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
+                          <PostImageGridCell
+                            name={f}
+                            src={`${API}/batches-media/${selectedBatch}/videos/${encodeURIComponent(f)}`}
+                            selected={selectedVideos.includes(f)}
+                            onToggle={() => setSelectedVideos(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])}
+                            onPreview={() => setFileLightboxSrc(`${API}/batches-media/${selectedBatch}/videos/${encodeURIComponent(f)}`)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )
+                ) : (
+                  fileViewMode === 'list' ? (
                   <div className="grid gap-1 max-h-40 overflow-y-auto pr-1">
                     {batchFiles.images.map(f => (
                       <button key={f}
                         onClick={() => setSelectedImages(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])}
                         className={cn("flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-all text-left w-full",
-                          selectedImages.includes(f) ? "border-purple-500/40 bg-purple-500/10 text-purple-300" : "border-border bg-transparent text-muted-foreground hover:border-border/80")}>
+                          selectedImages.includes(f) ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-transparent text-muted-foreground hover:border-border/80")}>
                         <div className={cn("w-3.5 h-3.5 rounded-sm border flex items-center justify-center flex-shrink-0",
                           selectedImages.includes(f) ? "border-current bg-current/20" : "border-muted-foreground/40")}>
                           {selectedImages.includes(f) && <Check className="w-2.5 h-2.5" />}
@@ -547,6 +771,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                       </div>
                     ))}
                   </div>
+                )
                 )}
               </CardContent>
             </Card>
@@ -554,7 +779,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
 
           {/* Generate button */}
           <Button className="w-full h-14 text-base font-bold gap-2 shadow-lg"
-            onClick={generate} disabled={generating || selectedImages.length === 0 || !selectedBatch}>
+            onClick={generate} disabled={generating || activeFiles.length === 0 || !selectedBatch}>
             {generating ? (
               <><RefreshCw className="w-5 h-5 animate-spin" /> Generating Posts…</>
             ) : (
@@ -584,7 +809,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                 </div>
                 <p className="text-sm font-medium text-muted-foreground">Ready to generate</p>
                 <p className="text-xs text-muted-foreground/60 mt-1">
-                  {!selectedBatch ? 'Select a batch to get started' : selectedImages.length === 0 ? 'Select images from the batch' : 'Click Generate when ready'}
+                  {!selectedBatch ? 'Select a batch to get started' : activeFiles.length === 0 ? `Select ${batchType === 'video' ? 'videos' : 'images'} from the batch` : 'Click Generate when ready'}
                 </p>
               </div>
             ) : (

@@ -11,6 +11,20 @@ import { cn } from '../lib/utils';
 
 const API = 'http://localhost:5001';
 
+// CSS approximations of the server-side FFmpeg color filters
+const CSS_FILTERS = {
+  none:      '',
+  bw:        'grayscale(100%)',
+  cinematic: 'saturate(70%) contrast(115%) brightness(95%)',
+  vibrant:   'saturate(165%) contrast(108%) brightness(102%)',
+  warm:      'sepia(25%) saturate(115%) brightness(105%)',
+  cool:      'hue-rotate(15deg) saturate(105%) brightness(102%)',
+  faded:     'saturate(65%) contrast(85%) brightness(108%)',
+  sepia:     'sepia(100%)',
+  matte:     'saturate(55%) contrast(125%) brightness(94%)',
+  neon:      'saturate(200%) contrast(120%) brightness(103%)',
+};
+
 // Aspect ratios for canvas display
 const ASPECT_RATIOS = {
   '1920x1080': 16 / 9,
@@ -42,7 +56,7 @@ function constrainCanvasW(containerW, resolution) {
 // x, y: 0-100% of canvas (center point)
 // w: 0-100% of canvas width
 
-export default function LayoutEditor({ preset, onLayoutChange, onFontChange, previewBgUrl, previewBgIsVideo, stacked = false, locked = false }) {
+export default function LayoutEditor({ preset, onLayoutChange, onFontChange, previewBgUrl, previewBgIsVideo, stacked = false, locked = false, previewText, imageFilter = 'none' }) {
   const resolution = preset?.resolution || '1920x1080';
   const layout     = preset?.layout || {};
 
@@ -93,6 +107,12 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
     grainRef.current = g;
     setFontFamily(preset?.fontFamily || 'default');
   }, [preset?.id]);
+
+  // Keep logo src in sync when logo is uploaded/removed without changing preset id
+  useEffect(() => {
+    const src = preset?.logoFile ? `${API}/preset-logos/${preset.id}/${preset.logoFile}` : null;
+    setElements(prev => prev.map(el => el.id === 'logo' ? { ...el, src } : el));
+  }, [preset?.logoFile]);
 
   // Debounced save back to parent
   const scheduleLayout = useCallback((newElements) => {
@@ -266,6 +286,7 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
               key={previewBgUrl}
               src={previewBgUrl}
               className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+              style={{ filter: CSS_FILTERS[imageFilter] || '' }}
               muted autoPlay loop playsInline
             />
           )}
@@ -274,6 +295,7 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
               src={previewBgUrl}
               alt=""
               className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+              style={{ filter: CSS_FILTERS[imageFilter] || '' }}
             />
           )}
 
@@ -307,6 +329,8 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
               canvasH={canvasH}
               selected={selected === el.id}
               onMouseDown={onMouseDown}
+              fontFamily={fontFamily}
+              previewText={previewText}
             />
           ))}
         </div>
@@ -327,6 +351,7 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
                   fontFamily={fontFamily}
                   handleFontFamilyChange={handleFontFamilyChange}
                   locked={locked}
+                  previewText={previewText}
                 />
               )}
             </div>
@@ -343,6 +368,7 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
                 fontFamily={fontFamily}
                 handleFontFamilyChange={handleFontFamilyChange}
                 locked={locked}
+                previewText={previewText}
               />
             )}
           </div>
@@ -407,7 +433,7 @@ function SidePanelList({ elements, selected, setSelected, updateElement, removeO
   );
 }
 
-function SidePanelControls({ selectedEl, updateElement, fontFamily, handleFontFamilyChange, locked }) {
+function SidePanelControls({ selectedEl, updateElement, fontFamily, handleFontFamilyChange, locked, previewText }) {
   return (
     <div className={cn("rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-3 slide-up", locked && "opacity-60")}>
       <p className="text-xs font-semibold text-primary">{selectedEl.label}</p>
@@ -433,7 +459,7 @@ function SidePanelControls({ selectedEl, updateElement, fontFamily, handleFontFa
             <FontPicker
               value={fontFamily}
               onChange={handleFontFamilyChange}
-              previewText="The quick brown fox jumps"
+              previewText={previewText || "The quick brown fox jumps"}
               disabled={locked}
             />
           </div>
@@ -473,11 +499,12 @@ function SidePanelControls({ selectedEl, updateElement, fontFamily, handleFontFa
 }
 
 // ── Canvas draggable element ───────────────────────────────────────────────────
-function CanvasElement({ el, canvasW, canvasH, selected, onMouseDown }) {
+function CanvasElement({ el, canvasW, canvasH, selected, onMouseDown, fontFamily, previewText }) {
   const wPx = (el.w / 100) * canvasW;
-  const hPx = el.type === 'subtitle' ? 36 : (el.h ? (el.h / 100) * canvasH : wPx * 0.5);
+  const isSubtitle = el.type === 'subtitle';
+  const hPx = isSubtitle ? 'auto' : (el.h ? (el.h / 100) * canvasH : wPx * 0.5);
   const left = (el.x / 100) * canvasW - wPx / 2;
-  const top  = (el.y / 100) * canvasH - hPx / 2;
+  const top  = isSubtitle ? (el.y / 100) * canvasH : (el.y / 100) * canvasH - hPx / 2;
 
   const baseStyle = {
     position: 'absolute',
@@ -485,6 +512,7 @@ function CanvasElement({ el, canvasW, canvasH, selected, onMouseDown }) {
     top,
     width: wPx,
     height: hPx,
+    transform: isSubtitle ? 'translateY(-50%)' : undefined,
     cursor: el.locked ? 'not-allowed' : 'grab',
     userSelect: 'none',
   };
@@ -500,22 +528,27 @@ function CanvasElement({ el, canvasW, canvasH, selected, onMouseDown }) {
       )}
     >
       {/* Content */}
-      {el.type === 'logo' && (
+      {el.type === 'logo' && el.src && (
+        <img src={el.src} alt="Logo" className="w-full h-full object-contain" draggable={false} />
+      )}
+      {el.type === 'logo' && !el.src && (
         <div className="w-full h-full flex items-center justify-center bg-white/10 rounded">
           <span className="text-white/70 text-xs font-bold tracking-wide">LOGO</span>
         </div>
       )}
       {el.type === 'subtitle' && (
-        <div className="w-full h-full flex items-center bg-black/50 rounded px-2"
+        <div className="w-full flex items-center bg-black/50 rounded px-2 py-1"
           style={{ justifyContent: el.textAlign === 'left' ? 'flex-start' : el.textAlign === 'right' ? 'flex-end' : 'center' }}>
-          <span className="text-white truncate"
+          <span className="text-white whitespace-pre-line"
             style={{
               fontSize: Math.max(8, (el.fontSize || 52) * (canvasW / 1920)),
               fontWeight: el.textBold ? 700 : 400,
               textAlign: el.textAlign || 'center',
               textShadow: '1px 1px 3px black',
+              fontFamily: fontFamily && fontFamily !== 'default' ? fontFamily : undefined,
+              lineHeight: 1.3,
             }}>
-            Subtitle text here
+            {previewText || 'Lorem ipsum dolor sit amet\nConsectetur adipiscing elit\nSed do eiusmod tempor incididunt\nUt labore et dolore magna aliqua'}
           </span>
         </div>
       )}
@@ -612,6 +645,7 @@ function buildElements(layout, preset) {
     h:       layout?.logo?.w  ?? 18, // maintain ratio
     locked:  false,
     visible: layout?.logo?.enabled !== false,
+    src:     preset?.logoFile ? `${API}/preset-logos/${preset.id}/${preset.logoFile}` : null,
   });
 
   // Subtitle element

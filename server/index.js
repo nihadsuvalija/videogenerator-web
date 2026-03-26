@@ -26,8 +26,9 @@ const ASSETS_DIR = path.join(DATA_ROOT, 'assets');
 const OVERLAYS_DIR = path.join(DATA_ROOT, 'overlays');
 const FONTS_DIR    = path.join(DATA_ROOT, 'fonts');
 const PRESET_LOGOS_DIR = path.join(DATA_ROOT, 'preset_logos');
+const AUDIO_BATCHES_DIR = path.join(DATA_ROOT, 'audio_batches');
 
-[DATA_ROOT, OUTPUT_DIR, BATCHES_DIR, ASSETS_DIR, OVERLAYS_DIR, FONTS_DIR, PRESET_LOGOS_DIR].forEach(d => fs.mkdirSync(d, { recursive: true }));
+[DATA_ROOT, OUTPUT_DIR, BATCHES_DIR, ASSETS_DIR, OVERLAYS_DIR, FONTS_DIR, PRESET_LOGOS_DIR, AUDIO_BATCHES_DIR].forEach(d => fs.mkdirSync(d, { recursive: true }));
 
 app.use('/outputs', express.static(OUTPUT_DIR));
 app.use('/assets', express.static(ASSETS_DIR));
@@ -46,6 +47,19 @@ const RESOLUTIONS = {
 app.get('/api/resolutions', (req, res) => {
   res.json(Object.entries(RESOLUTIONS).map(([key, val]) => ({ key, ...val })));
 });
+
+// ─── Image / Video Color Filters ─────────────────────────────────────────────
+const IMAGE_FILTERS = {
+  'bw':         'hue=s=0',
+  'cinematic':  "eq=saturation=0.75:contrast=1.15:brightness=-0.03,curves=r='0/0 0.5/0.53 1/1':b='0/0 0.5/0.44 1/1'",
+  'vibrant':    'eq=saturation=1.65:contrast=1.08:brightness=0.02',
+  'warm':       "curves=r='0/0 0.5/0.57 1/1':g='0/0 0.5/0.52 1/1':b='0/0 0.5/0.44 1/1',eq=saturation=1.1",
+  'cool':       "curves=r='0/0 0.5/0.44 1/1':b='0/0 0.5/0.57 1/1',eq=saturation=1.05",
+  'faded':      "curves=master='0/0.05 0.5/0.5 1/0.9',eq=saturation=0.65:contrast=0.85",
+  'sepia':      'colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131',
+  'matte':      'eq=contrast=1.25:brightness=-0.06:saturation=0.55',
+  'neon':       'eq=saturation=2.0:contrast=1.2:brightness=0.03',
+};
 
 // ─── Fonts ────────────────────────────────────────────────────────────────────
 const AVAILABLE_FONTS = [
@@ -246,6 +260,107 @@ app.put('/api/auth/plan', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Quote Batch Schema ───────────────────────────────────────────────────────
+const QuoteBatchSchema = new mongoose.Schema({
+  id:        { type: String, default: uuidv4 },
+  name:      { type: String, required: true },
+  userId:    { type: String, default: null },
+  createdAt: { type: Date, default: Date.now },
+});
+const QuoteBatch = mongoose.model('QuoteBatch', QuoteBatchSchema);
+
+app.get('/api/quote-batches', requireAuth, async (req, res) => {
+  const batches = await QuoteBatch.find({ userId: req.user.id }).sort({ createdAt: 1 });
+  res.json(batches);
+});
+
+app.post('/api/quote-batches', requireAuth, async (req, res) => {
+  const { name } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: 'name required' });
+  const b = new QuoteBatch({ name: name.trim(), userId: req.user.id });
+  await b.save();
+  res.json(b);
+});
+
+app.put('/api/quote-batches/:id', requireAuth, async (req, res) => {
+  const b = await QuoteBatch.findOneAndUpdate(
+    { id: req.params.id, userId: req.user.id },
+    { $set: { name: req.body.name } },
+    { new: true }
+  );
+  if (!b) return res.status(404).json({ error: 'not found' });
+  res.json(b);
+});
+
+app.delete('/api/quote-batches/:id', requireAuth, async (req, res) => {
+  await QuoteBatch.deleteOne({ id: req.params.id, userId: req.user.id });
+  // Unassign quotes from the deleted batch
+  await Quote.updateMany({ batchId: req.params.id, userId: req.user.id }, { $set: { batchId: null } });
+  res.json({ deleted: true });
+});
+
+// ─── Quote Schema ─────────────────────────────────────────────────────────────
+const QuoteSchema = new mongoose.Schema({
+  id:        { type: String, default: uuidv4 },
+  text:      { type: String, required: true },
+  enabled:   { type: Boolean, default: true },
+  usedAt:    { type: Date, default: null },
+  batchId:   { type: String, default: null },
+  userId:    { type: String, default: null },
+  createdAt: { type: Date, default: Date.now },
+});
+const Quote = mongoose.model('Quote', QuoteSchema);
+
+app.get('/api/quotes', requireAuth, async (req, res) => {
+  const filter = { userId: req.user.id };
+  if (req.query.batchId === 'null') filter.batchId = null;
+  else if (req.query.batchId) filter.batchId = req.query.batchId;
+  const quotes = await Quote.find(filter).sort({ createdAt: -1 });
+  res.json(quotes);
+});
+
+app.post('/api/quotes', requireAuth, async (req, res) => {
+  const { text, batchId } = req.body;
+  if (!text?.trim()) return res.status(400).json({ error: 'text required' });
+  const q = new Quote({ text: text.trim(), batchId: batchId || null, userId: req.user.id });
+  await q.save();
+  res.json(q);
+});
+
+app.post('/api/quotes/bulk', requireAuth, async (req, res) => {
+  const { texts, batchId } = req.body;
+  if (!Array.isArray(texts) || texts.length === 0) return res.status(400).json({ error: 'texts array required' });
+  const docs = texts.map(t => new Quote({ text: t.trim(), batchId: batchId || null, userId: req.user.id }));
+  await Quote.insertMany(docs);
+  res.json(docs);
+});
+
+// must be before /:id routes
+app.post('/api/quotes/mark-used', requireAuth, async (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids array required' });
+  await Quote.updateMany(
+    { id: { $in: ids }, userId: req.user.id },
+    { $set: { enabled: false, usedAt: new Date() } }
+  );
+  res.json({ updated: ids.length });
+});
+
+app.put('/api/quotes/:id', requireAuth, async (req, res) => {
+  const q = await Quote.findOneAndUpdate(
+    { id: req.params.id, userId: req.user.id },
+    { $set: req.body },
+    { new: true }
+  );
+  if (!q) return res.status(404).json({ error: 'not found' });
+  res.json(q);
+});
+
+app.delete('/api/quotes/:id', requireAuth, async (req, res) => {
+  await Quote.deleteOne({ id: req.params.id, userId: req.user.id });
+  res.json({ deleted: true });
+});
+
 const PresetSchema = new mongoose.Schema({
   id:             { type: String, default: uuidv4 },
   name:           { type: String, default: 'New Preset' },
@@ -263,6 +378,7 @@ const PresetSchema = new mongoose.Schema({
   videoCount:     { type: Number, default: 1 },
   fontFamily:     { type: String, default: 'default' },
   logoFile:       { type: String, default: null },
+  imageFilter:    { type: String, default: 'none' },
   presetType:     { type: String, enum: ['video', 'post'], default: 'video' },
   resolutionEntries: { type: Array, default: [] }, // [{ key: '1920x1080', count: 2 }, ...]
   // Layout — all positions as 0–100 percentages of frame dimensions
@@ -439,6 +555,81 @@ app.delete('/api/presets/:id/logo', async (req, res) => {
 app.use('/preset-logos/:presetId', (req, res, next) => {
   const dir = path.join(PRESET_LOGOS_DIR, req.params.presetId);
   express.static(dir)(req, res, next);
+});
+
+app.use('/audio-batches/:batchId', (req, res, next) => {
+  const dir = path.join(AUDIO_BATCHES_DIR, req.params.batchId);
+  express.static(dir)(req, res, next);
+});
+
+// ─── Audio Batch Schema ───────────────────────────────────────────────────────
+const AudioBatchSchema = new mongoose.Schema({
+  id:        { type: String, default: uuidv4 },
+  name:      { type: String, required: true },
+  userId:    { type: String, default: null },
+  createdAt: { type: Date, default: Date.now },
+});
+const AudioBatch = mongoose.model('AudioBatch', AudioBatchSchema);
+
+const audioBatchUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(AUDIO_BATCHES_DIR, req.params.id);
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => cb(null, file.originalname),
+  }),
+  fileFilter: (req, file, cb) => {
+    cb(null, /\.(mp3|m4a|wav|aac|ogg|flac)$/i.test(file.originalname));
+  },
+});
+
+app.get('/api/audio-batches', requireAuth, async (req, res) => {
+  const batches = await AudioBatch.find({ userId: req.user.id }).sort({ createdAt: 1 });
+  res.json(batches);
+});
+
+app.post('/api/audio-batches', requireAuth, async (req, res) => {
+  const { name } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: 'name required' });
+  const b = await AudioBatch.create({ name: name.trim(), userId: req.user.id });
+  fs.mkdirSync(path.join(AUDIO_BATCHES_DIR, b.id), { recursive: true });
+  res.json(b);
+});
+
+app.put('/api/audio-batches/:id', requireAuth, async (req, res) => {
+  const b = await AudioBatch.findOneAndUpdate(
+    { id: req.params.id, userId: req.user.id },
+    { $set: { name: req.body.name } },
+    { new: true }
+  );
+  res.json(b);
+});
+
+app.delete('/api/audio-batches/:id', requireAuth, async (req, res) => {
+  await AudioBatch.deleteOne({ id: req.params.id, userId: req.user.id });
+  const dir = path.join(AUDIO_BATCHES_DIR, req.params.id);
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  res.json({ deleted: true });
+});
+
+app.get('/api/audio-batches/:id/files', requireAuth, async (req, res) => {
+  const dir = path.join(AUDIO_BATCHES_DIR, req.params.id);
+  if (!fs.existsSync(dir)) return res.json([]);
+  const files = fs.readdirSync(dir).filter(f => /\.(mp3|m4a|wav|aac|ogg|flac)$/i.test(f));
+  res.json(files);
+});
+
+app.post('/api/audio-batches/:id/files', requireAuth, audioBatchUpload.array('files', 50), (req, res) => {
+  const files = (req.files || []).map(f => f.filename);
+  res.json({ uploaded: files });
+});
+
+app.delete('/api/audio-batches/:id/files/:filename', requireAuth, (req, res) => {
+  const fp = path.join(AUDIO_BATCHES_DIR, req.params.id, req.params.filename);
+  if (fs.existsSync(fp)) fs.unlinkSync(fp);
+  res.json({ deleted: true });
 });
 
 // ─── Multer configs ───────────────────────────────────────────────────────────
@@ -708,6 +899,9 @@ app.post('/api/generate', async (req, res) => {
     videoCount,
     fontFamily,
     fontSize,
+    imageFilter,
+    audioBatchId,
+    audioBatchFileNames,
     layout: requestLayout,
   } = req.body;
 
@@ -717,6 +911,7 @@ app.post('/api/generate', async (req, res) => {
   let layout = requestLayout || null;
   let presetFontFamily = 'default';
   let presetLogoFile = null;
+  let presetImageFilter = 'none';
   let resolvedSliceDuration     = Number(sliceDuration)     || 3;
   let resolvedImageDuration     = Number(imageDuration)     || 0.2;
   let resolvedPreferredDuration = Number(preferredDuration) || 0;
@@ -724,8 +919,9 @@ app.post('/api/generate', async (req, res) => {
     const preset = await Preset.findOne({ id: presetId });
     if (preset) {
       if (!layout && preset.layout) layout = preset.layout;
-      if (preset.fontFamily) presetFontFamily = preset.fontFamily;
-      if (preset.logoFile)   presetLogoFile   = preset.logoFile;
+      if (preset.fontFamily)   presetFontFamily   = preset.fontFamily;
+      if (preset.logoFile)     presetLogoFile     = preset.logoFile;
+      if (preset.imageFilter)  presetImageFilter  = preset.imageFilter;
       if (preset.sliceDuration     != null) resolvedSliceDuration     = preset.sliceDuration;
       if (preset.imageDuration     != null) resolvedImageDuration     = preset.imageDuration;
       if (preset.preferredDuration != null) resolvedPreferredDuration = preset.preferredDuration;
@@ -773,8 +969,11 @@ app.post('/api/generate', async (req, res) => {
     layout,
     presetId: presetId || null,
     videoCount: Number(videoCount) || 1,
-    fontFamily: fontFamily || presetFontFamily || 'default',
-    fontSize:   fontSize ? Number(fontSize) : null,
+    fontFamily:          fontFamily || presetFontFamily || 'default',
+    fontSize:            fontSize ? Number(fontSize) : null,
+    imageFilter:         imageFilter || presetImageFilter || 'none',
+    audioBatchId:        audioBatchId || null,
+    audioBatchFileNames: audioBatchFileNames || [],
     presetLogoFile,
   }).catch(e => console.error('Generation error:', e));
 });
@@ -783,7 +982,7 @@ app.post('/api/generate-posts', async (req, res) => {
   const {
     batchName, imageFiles, quotes, postCount,
     resolution, textMaxChars, layout, presetId,
-    fontFamily, fontSize,
+    fontFamily, fontSize, imageFilter,
   } = req.body;
 
   if (!batchName) return res.status(400).json({ error: 'batchName required' });
@@ -792,11 +991,13 @@ app.post('/api/generate-posts', async (req, res) => {
   let effectiveLayout = layout || null;
   let postPresetFontFamily = 'default';
   let postPresetLogoFile = null;
+  let postPresetImageFilter = 'none';
   if (presetId) {
     const preset = await Preset.findOne({ id: presetId });
     if (!effectiveLayout && preset?.layout) effectiveLayout = preset.layout;
-    if (preset?.fontFamily) postPresetFontFamily = preset.fontFamily;
-    if (preset?.logoFile) postPresetLogoFile = preset.logoFile;
+    if (preset?.fontFamily)  postPresetFontFamily  = preset.fontFamily;
+    if (preset?.logoFile)    postPresetLogoFile    = preset.logoFile;
+    if (preset?.imageFilter) postPresetImageFilter = preset.imageFilter;
   }
 
   let postPresetName = null;
@@ -834,13 +1035,14 @@ app.post('/api/generate-posts', async (req, res) => {
     presetId:    presetId || null,
     fontFamily:  fontFamily || postPresetFontFamily || 'default',
     fontSize:    fontSize ? Number(fontSize) : null,
+    imageFilter: imageFilter || postPresetImageFilter || 'none',
     presetLogoFile: postPresetLogoFile,
   }).catch(e => console.error('Post generation error:', e));
 });
 
 // ─── Video Generation ─────────────────────────────────────────────────────────
 async function runGeneration(job, opts) {
-  const { batchName, videoFiles, imageFiles, logoText, logoSubtext, quotes, textMaxChars, preferredDuration, sliceDuration, imageDuration, resolution, sessionToken, layout, presetId, videoCount = 1, fontFamily = 'default', fontSize = null, presetLogoFile = null, audioVolume = 1, audioStart = 0, audioEnd = 0 } = opts;
+  const { batchName, videoFiles, imageFiles, logoText, logoSubtext, quotes, textMaxChars, preferredDuration, sliceDuration, imageDuration, resolution, sessionToken, layout, presetId, videoCount = 1, fontFamily = 'default', fontSize = null, imageFilter = 'none', presetLogoFile = null, audioVolume = 1, audioStart = 0, audioEnd = 0, audioBatchId = null, audioBatchFileNames = [] } = opts;
   const quoteLines = (quotes || '').split('\n').map(q => q.trim()).filter(Boolean);
   const batchDir = path.join(BATCHES_DIR, batchName);
 
@@ -932,6 +1134,16 @@ async function runGeneration(job, opts) {
       if (audioFile) { audioPath = path.join(OVERLAYS_DIR, audioFile); await addLog(`Audio: ${audioFile}`); }
     }
 
+    // Build batch audio paths (used for random-per-video selection inside the loop)
+    const batchAudioPaths = [];
+    if (audioBatchId && audioBatchFileNames.length > 0) {
+      for (const fname of audioBatchFileNames) {
+        const fp = path.join(AUDIO_BATCHES_DIR, audioBatchId, fname);
+        if (fs.existsSync(fp)) batchAudioPaths.push(fp);
+      }
+      if (batchAudioPaths.length > 0) await addLog(`Audio batch: ${batchAudioPaths.length} file(s) — one picked randomly per video`);
+    }
+
     // Static overlay images from preset
     const staticOverlays = [];
     if (presetId && L.overlays.length > 0) {
@@ -984,6 +1196,12 @@ async function runGeneration(job, opts) {
         const factor = parseFloat((1 - L.dimBackground).toFixed(3));
         filters.push(`[${cur}]colorchannelmixer=rr=${factor}:gg=${factor}:bb=${factor}[bg_dimmed]`);
         cur = 'bg_dimmed';
+      }
+
+      // Color filter
+      if (imageFilter && imageFilter !== 'none' && IMAGE_FILTERS[imageFilter]) {
+        filters.push(`[${cur}]${IMAGE_FILTERS[imageFilter]}[color_filtered]`);
+        cur = 'color_filtered';
       }
 
       // Logo
@@ -1084,6 +1302,12 @@ async function runGeneration(job, opts) {
         : '';
       if (videoQuote) await addLog(`Quote: "${videoQuote.slice(0, 60)}${videoQuote.length > 60 ? '…' : ''}"`);
 
+      // Pick audio: random from batch (different per video) or fall back to session audio
+      const videoAudioPath = batchAudioPaths.length > 0
+        ? batchAudioPaths[Math.floor(Math.random() * batchAudioPaths.length)]
+        : audioPath;
+      if (videoAudioPath && batchAudioPaths.length > 0) await addLog(`Audio: ${path.basename(videoAudioPath)}`);
+
 
       // Scale progress for this video within overall job progress (5–95%)
       const pBase  = 5 + (vidIdx / effectiveCount) * 90;
@@ -1101,11 +1325,11 @@ async function runGeneration(job, opts) {
 
         if (selectedVideos.length > 0) {
           let targetDur = 0;
-          if (audioPath) {
-            targetDur = await getVideoDuration(audioPath).catch(() => 0);
+          if (videoAudioPath) {
+            targetDur = await getVideoDuration(videoAudioPath).catch(() => 0);
           }
           if (preferredDuration > 0) {
-            targetDur = audioPath ? Math.min(targetDur, preferredDuration) : preferredDuration;
+            targetDur = videoAudioPath ? Math.min(targetDur, preferredDuration) : preferredDuration;
           }
           const fillToAudio = targetDur > 0;
           await addLog(`Processing videos — target: ${fillToAudio ? targetDur.toFixed(1) + 's' : 'one pass'}${preferredDuration > 0 ? ' (preferred duration)' : ''}`);
@@ -1279,7 +1503,7 @@ async function runGeneration(job, opts) {
           ? path.join(localTmpDir, 'pre_subs.mp4')
           : outputPath;
 
-        if (audioPath) {
+        if (videoAudioPath) {
           await addLog('Mixing audio...');
           await localSetStatus(88);
           const muxTarget = assPath ? path.join(localTmpDir, 'pre_subs.mp4') : preSubsPath;
@@ -1287,7 +1511,8 @@ async function runGeneration(job, opts) {
             ? ['-t', String(preferredDuration)]
             : ['-shortest'];
           const audioFilters = [];
-          if (audioStart > 0 || audioEnd > 0) {
+          // Only apply clip range for manual session audio; batch audio plays in full
+          if (!batchAudioPaths.length && (audioStart > 0 || audioEnd > 0)) {
             const trimFilter = audioEnd > 0
               ? `atrim=start=${audioStart}:end=${audioEnd}`
               : `atrim=start=${audioStart}`;
@@ -1297,7 +1522,7 @@ async function runGeneration(job, opts) {
 
           await ffmpegRun([
             '-i', silentOut,
-            '-i', audioPath,
+            '-i', videoAudioPath,
             '-map', '0:v',
             '-map', '1:a',
             '-c:v', assPath ? 'copy' : 'libx264',
@@ -1405,7 +1630,7 @@ async function runGeneration(job, opts) {
 
 // ─── Post Generation ──────────────────────────────────────────────────────────
 async function runPostGeneration(job, opts) {
-  const { batchName, imageFiles, quotes, postCount, resolution, textMaxChars, layout, presetId, fontFamily = 'default', fontSize = null, presetLogoFile = null } = opts;
+  const { batchName, imageFiles, quotes, postCount, resolution, textMaxChars, layout, presetId, fontFamily = 'default', fontSize = null, imageFilter = 'none', presetLogoFile = null } = opts;
 
   const abortCtrl = new AbortController();
   const signal    = abortCtrl.signal;
@@ -1551,6 +1776,12 @@ async function runPostGeneration(job, opts) {
         const factor = parseFloat((1 - L.dimBackground).toFixed(3));
         filterParts.push(`[${cur}]colorchannelmixer=rr=${factor}:gg=${factor}:bb=${factor}[bg_dimmed]`);
         cur = 'bg_dimmed';
+      }
+
+      // Color filter
+      if (imageFilter && imageFilter !== 'none' && IMAGE_FILTERS[imageFilter]) {
+        filterParts.push(`[${cur}]${IMAGE_FILTERS[imageFilter]}[color_filtered]`);
+        cur = 'color_filtered';
       }
 
       // Logo overlay

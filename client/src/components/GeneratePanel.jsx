@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useAuth } from '../context/AuthContext';
 import VideoMetadataPanel from './VideoMetadataPanel';
 import MediaLightbox from './MediaLightbox';
 import BatchPickerModal from './BatchPickerModal';
 import LyricsPanel from './LyricsPanel';
 import FontPicker from './FontPicker';
+import FilterPicker from './FilterPicker';
 import LayoutEditor from './LayoutEditor';
 import {
   Clapperboard, Play, Pause, Upload, RefreshCw, Check, AlertCircle,
   Download, Trash2, Music, Monitor, FileText, Sliders, Lock, X, Type, Sparkles,
-  Film, Image, Volume2, VolumeX, Scissors, LayoutGrid, List, Eye, Hash, StopCircle,
+  Film, Image, Volume2, VolumeX, Scissors, LayoutGrid, List, Eye, Hash, StopCircle, BookOpen,
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -41,9 +43,16 @@ const DEFAULT_VIDEO_LAYOUT = {
 };
 
 export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = [], fileRefreshTrigger, activePreset, onPresetUpdated, onClearPreset, onJobComplete, presets, onApplyPreset }) {
+  const { token } = useAuth();
   const [quotes, setQuotes]                     = useState('');
+  const [quotesMode, setQuotesMode]             = useState('manual'); // 'manual' | 'library'
+  const [libraryQuotes, setLibraryQuotes]       = useState([]);
+  const [libraryLoading, setLibraryLoading]     = useState(false);
+  const [libraryBatch, setLibraryBatch]         = useState(null); // null = all
+  const [quoteBatches, setQuoteBatches]         = useState([]);
   const [fontFamily, setFontFamily]             = useState('default');
   const [fontSize, setFontSize]                 = useState('52');
+  const [imageFilter, setImageFilter]           = useState('none');
   const [textMaxChars, setTextMaxChars]         = useState('20');
   const [preferredDuration, setPreferredDuration] = useState('20');
   const [sliceDuration, setSliceDuration]       = useState('3');
@@ -72,6 +81,14 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
   const [uploadingSrt, setUploadingSrt]         = useState(false);
   const [uploadingAudio, setUploadingAudio]     = useState(false);
 
+  // Audio batch state
+  const [audioMode, setAudioMode]               = useState('manual'); // 'manual' | 'batch'
+  const [audioBatches, setAudioBatches]         = useState([]);
+  const [selectedAudioBatch, setSelectedAudioBatch] = useState(null);
+  const [audioBatchFiles, setAudioBatchFiles]   = useState([]);
+  const [selectedAudioFiles, setSelectedAudioFiles] = useState([]);
+  const [loadingAudioBatch, setLoadingAudioBatch] = useState(false);
+
   const [localLayouts, setLocalLayouts]         = useState({ '1920x1080': DEFAULT_VIDEO_LAYOUT });
   const [activeLayoutRes, setActiveLayoutRes]   = useState('1920x1080');
 
@@ -88,6 +105,13 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
   const pollRef        = useRef();
 
   const locked = activePreset?.locked ?? false;
+
+  // Derive batch type from loaded files
+  const batchType = !selectedBatch ? null
+    : batchFiles.videos.length > 0 && batchFiles.images.length === 0 ? 'video'
+    : batchFiles.images.length > 0 && batchFiles.videos.length === 0 ? 'image'
+    : batchFiles.videos.length > 0 && batchFiles.images.length > 0 ? 'mixed'
+    : null;
 
   // When a preset is applied, populate all fields from it
   useEffect(() => {
@@ -106,6 +130,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
     setImageDuration(String(activePreset.imageDuration ?? 0.2));
     setFontFamily(activePreset.fontFamily || 'default');
     if (activePreset.layout?.subtitles?.fontSize) setFontSize(String(activePreset.layout.subtitles.fontSize));
+    setImageFilter(activePreset.imageFilter || 'none');
     setTextMaxChars(String(activePreset.textMaxChars ?? 20));
     setPreferredDuration(String(activePreset.preferredDuration ?? 20));
     setVideoCount(activePreset.videoCount ?? 1);
@@ -199,6 +224,59 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
   const setAndSaveImages    = (v) => { setSelectedImages(v); }; // not saved to preset — batch-specific
   const setAndSaveVideoCount = (v) => { setVideoCount(v); saveBackToPreset({ videoCount: v }); };
 
+  const loadLibraryQuotes = useCallback(async (batchId = null) => {
+    setLibraryLoading(true);
+    try {
+      const url = batchId ? `${API}/api/quotes?batchId=${batchId}` : `${API}/api/quotes`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const all = await res.json();
+      setLibraryQuotes(all.filter(q => q.enabled));
+    } catch {}
+    finally { setLibraryLoading(false); }
+  }, [token]);
+
+  const switchLibraryBatch = (batchId) => {
+    setLibraryBatch(batchId);
+    loadLibraryQuotes(batchId);
+  };
+
+  const switchQuotesMode = (mode) => {
+    setQuotesMode(mode);
+    if (mode === 'library') {
+      fetch(`${API}/api/quote-batches`, { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.json()).then(setQuoteBatches).catch(() => {});
+      loadLibraryQuotes(libraryBatch);
+    }
+  };
+
+  // Audio batch helpers
+  const loadAudioBatches = useCallback(() => {
+    fetch(`${API}/api/audio-batches`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json()).then(setAudioBatches).catch(() => {});
+  }, [token]);
+
+  const selectAudioBatch = async (batchId) => {
+    setSelectedAudioBatch(batchId);
+    setSelectedAudioFiles([]);
+    if (!batchId) { setAudioBatchFiles([]); return; }
+    setLoadingAudioBatch(true);
+    try {
+      const res = await fetch(`${API}/api/audio-batches/${batchId}/files`, { headers: { Authorization: `Bearer ${token}` } });
+      setAudioBatchFiles(await res.json());
+    } finally { setLoadingAudioBatch(false); }
+  };
+
+  const toggleAudioFile = (filename) => {
+    setSelectedAudioFiles(prev =>
+      prev.includes(filename) ? prev.filter(f => f !== filename) : [...prev, filename]
+    );
+  };
+
+  const switchAudioMode = (mode) => {
+    setAudioMode(mode);
+    if (mode === 'batch') loadAudioBatches();
+  };
+
   // Load available resolutions
   useEffect(() => {
     fetch(`${API}/api/resolutions`).then(r => r.json()).then(setAvailableResolutions).catch(() => {});
@@ -211,6 +289,11 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
         .then(r => r.json())
         .then(data => {
           setBatchFiles(data);
+          // Auto-detect batch type and lock mediaType accordingly
+          const bt = data.videos.length > 0 && data.images.length === 0 ? 'video'
+            : data.images.length > 0 && data.videos.length === 0 ? 'image'
+            : null;
+          if (bt) setMediaType(bt);
           // Only auto-select all if no preset is active
           if (!activePreset) {
             setSelectedVideos(data.videos);
@@ -312,13 +395,24 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
     setJobs([]);
     setJobIds([]);
     try {
+      // Resolve quotes: pull from library if in library mode
+      let resolvedQuotes = quotes;
+      let usedQuoteIds = [];
+      if (quotesMode === 'library') {
+        const needed = totalVideos;
+        const pool = libraryQuotes.slice(0, needed);
+        resolvedQuotes = pool.map(q => q.text).join('\n');
+        usedQuoteIds = pool.map(q => q.id);
+      }
+
       const baseParams = {
         batchName: selectedBatch,
         videoFiles: selectedVideos,
         imageFiles: selectedImages,
-        quotes,
+        quotes: resolvedQuotes,
         fontFamily,
         fontSize: Number(fontSize) || 52,
+        imageFilter,
         textMaxChars: Number(textMaxChars) || 0,
         preferredDuration: Number(preferredDuration) || 0,
         sliceDuration: Number(sliceDuration) || 3,
@@ -326,7 +420,9 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
         audioVolume: audioVolume / 100,
         audioStart: audioStart || 0,
         audioEnd: audioEnd || 0,
-        sessionToken: SESSION_TOKEN,
+        sessionToken: audioMode === 'manual' ? SESSION_TOKEN : null,
+        audioBatchId: audioMode === 'batch' ? selectedAudioBatch : null,
+        audioBatchFileNames: audioMode === 'batch' ? selectedAudioFiles : [],
         presetId: activePreset?.id || null,
       };
       const ids = await Promise.all(
@@ -343,6 +439,16 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
         })
       );
       setJobIds(ids);
+
+      // Mark used library quotes as disabled
+      if (usedQuoteIds.length > 0) {
+        await fetch(`${API}/api/quotes/mark-used`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ ids: usedQuoteIds }),
+        });
+        setLibraryQuotes(prev => prev.filter(q => !usedQuoteIds.includes(q.id)));
+      }
     } catch { setGenerating(false); }
   };
 
@@ -411,6 +517,8 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                 previewBgIsVideo={previewBgIsVideo}
                 stacked
                 locked={locked}
+                previewText={quotesMode === 'library' ? libraryQuotes[0]?.text : quotes.split('\n').find(l => l.trim())}
+                imageFilter={imageFilter}
               />
             </CardContent>
           </Card>
@@ -475,20 +583,31 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label className="text-xs uppercase tracking-widest text-muted-foreground">Source Media</Label>
-                <div className="flex gap-2">
-                  <button disabled={locked} onClick={() => setAndSaveMediaType('video')}
-                    className={cn("flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all",
-                      mediaType === 'video' ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-border/80",
-                      locked && "opacity-50 cursor-not-allowed")}>
-                    <Film className="w-4 h-4" /> Video Batch
-                  </button>
-                  <button disabled={locked} onClick={() => setAndSaveMediaType('image')}
-                    className={cn("flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all",
-                      mediaType === 'image' ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-border/80",
-                      locked && "opacity-50 cursor-not-allowed")}>
-                    <Image className="w-4 h-4" /> Image Batch
-                  </button>
-                </div>
+                {batchType && batchType !== 'mixed' ? (
+                  <div className={cn(
+                    "flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium",
+                    "border-primary/40 bg-primary/10 text-primary"
+                  )}>
+                    {batchType === 'video' ? <Film className="w-4 h-4" /> : <Image className="w-4 h-4" />}
+                    {batchType === 'video' ? 'Video Batch' : 'Image Batch'}
+                    <span className="ml-auto text-[10px] text-muted-foreground font-normal">Auto-detected</span>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <button disabled={locked} onClick={() => setAndSaveMediaType('video')}
+                      className={cn("flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all",
+                        mediaType === 'video' ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-border/80",
+                        locked && "opacity-50 cursor-not-allowed")}>
+                      <Film className="w-4 h-4" /> Video Batch
+                    </button>
+                    <button disabled={locked} onClick={() => setAndSaveMediaType('image')}
+                      className={cn("flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all",
+                        mediaType === 'image' ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-border/80",
+                        locked && "opacity-50 cursor-not-allowed")}>
+                      <Image className="w-4 h-4" /> Image Batch
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 {mediaType === 'video' ? (
@@ -517,6 +636,19 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
             </CardContent>
           </Card>
 
+          {/* Filter */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <span className="text-base">🎨</span> Color Filter
+              </CardTitle>
+              <CardDescription>Apply a cinematic tint or color grade to the media</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <FilterPicker value={imageFilter} onChange={setImageFilter} disabled={locked} />
+            </CardContent>
+          </Card>
+
           {/* Quotes & Text */}
           <Card>
             <CardHeader className="pb-3">
@@ -525,43 +657,122 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                   <CardTitle className="text-base flex items-center gap-2">
                     <FileText className="w-4 h-4 text-primary" /> Quotes &amp; Text
                   </CardTitle>
-                  <CardDescription>One per line — each video picks one at random</CardDescription>
+                  <CardDescription>
+                    {quotesMode === 'library' ? 'Using quotes from your library' : 'One per line — each video picks one at random'}
+                  </CardDescription>
                 </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  {srtFile && <span className="text-xs text-yellow-400 hidden sm:flex items-center gap-1"><FileText className="w-3 h-3" /> SRT overrides</span>}
-                  <Button variant="outline" size="sm" disabled={!!srtFile || generatingQuotes}
-                    onClick={async () => {
-                      setAiQuoteError(null); setGeneratingQuotes(true);
-                      try {
-                        const r = await fetch(`${API}/api/ai/quotes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: totalVideos }) });
-                        const data = await r.json();
-                        if (!r.ok) throw new Error(data.error || 'Unknown error');
-                        setAndSaveQuotes(data.quotes.join('\n'));
-                      } catch (e) { setAiQuoteError(e.message); } finally { setGeneratingQuotes(false); }
-                    }}
-                    className="h-7 px-2.5 text-xs gap-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white border-0 shadow-md shadow-violet-500/20 disabled:opacity-50"
-                  >
-                    {generatingQuotes ? <><RefreshCw className="w-3 h-3 animate-spin" /> AI…</> : <><Sparkles className="w-3 h-3" /> AI ({totalVideos})</>}
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => quotesFileRef.current?.click()} disabled={!!srtFile} className="h-7 px-2 text-xs">
-                    <Upload className="w-3 h-3" />
-                  </Button>
-                  <input ref={quotesFileRef} type="file" accept=".txt" className="hidden"
-                    onChange={e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = ev => setAndSaveQuotes(ev.target.result); r.readAsText(f); e.target.value = ''; }} />
-                </div>
+                {quotesMode === 'manual' && (
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {srtFile && <span className="text-xs text-yellow-400 hidden sm:flex items-center gap-1"><FileText className="w-3 h-3" /> SRT overrides</span>}
+                    <Button variant="outline" size="sm" disabled={!!srtFile || generatingQuotes}
+                      onClick={async () => {
+                        setAiQuoteError(null); setGeneratingQuotes(true);
+                        try {
+                          const r = await fetch(`${API}/api/ai/quotes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: totalVideos }) });
+                          const data = await r.json();
+                          if (!r.ok) throw new Error(data.error || 'Unknown error');
+                          setAndSaveQuotes(data.quotes.join('\n'));
+                        } catch (e) { setAiQuoteError(e.message); } finally { setGeneratingQuotes(false); }
+                      }}
+                      className="h-7 px-2.5 text-xs gap-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white border-0 shadow-md shadow-violet-500/20 disabled:opacity-50"
+                    >
+                      {generatingQuotes ? <><RefreshCw className="w-3 h-3 animate-spin" /> AI…</> : <><Sparkles className="w-3 h-3" /> AI ({totalVideos})</>}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => quotesFileRef.current?.click()} disabled={!!srtFile} className="h-7 px-2 text-xs">
+                      <Upload className="w-3 h-3" />
+                    </Button>
+                    <input ref={quotesFileRef} type="file" accept=".txt" className="hidden"
+                      onChange={e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = ev => setAndSaveQuotes(ev.target.result); r.readAsText(f); e.target.value = ''; }} />
+                  </div>
+                )}
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              {aiQuoteError && <p className="text-xs text-red-400 flex items-center gap-1"><AlertCircle className="w-3 h-3 flex-shrink-0" />{aiQuoteError}</p>}
-              <textarea
-                placeholder={"One quote per line\n\nBelieve in yourself\nWork hard, dream big"}
-                value={quotes} onChange={e => setAndSaveQuotes(e.target.value)}
-                disabled={!!srtFile} rows={4}
-                className={cn("w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y mono",
-                  srtFile && "opacity-40 cursor-not-allowed")}
-              />
-              {quotes.trim() && (
-                <p className="text-xs text-muted-foreground">{quotes.split('\n').filter(l => l.trim()).length} quote{quotes.split('\n').filter(l => l.trim()).length !== 1 ? 's' : ''}</p>
+              {/* Mode toggle */}
+              <div className="flex gap-1.5 bg-secondary rounded-lg p-1">
+                <button onClick={() => switchQuotesMode('manual')}
+                  className={cn("flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-medium transition-all",
+                    quotesMode === 'manual' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                  <FileText className="w-3 h-3" /> Manual
+                </button>
+                <button onClick={() => switchQuotesMode('library')}
+                  className={cn("flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-medium transition-all",
+                    quotesMode === 'library' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                  <BookOpen className="w-3 h-3" /> Quote Library
+                </button>
+              </div>
+
+              {quotesMode === 'manual' ? (
+                <>
+                  {aiQuoteError && <p className="text-xs text-red-400 flex items-center gap-1"><AlertCircle className="w-3 h-3 flex-shrink-0" />{aiQuoteError}</p>}
+                  <textarea
+                    placeholder={"One quote per line\n\nBelieve in yourself\nWork hard, dream big"}
+                    value={quotes} onChange={e => setAndSaveQuotes(e.target.value)}
+                    disabled={!!srtFile} rows={4}
+                    className={cn("w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y mono",
+                      srtFile && "opacity-40 cursor-not-allowed")}
+                  />
+                  {quotes.trim() && (
+                    <p className="text-xs text-muted-foreground">{quotes.split('\n').filter(l => l.trim()).length} quote{quotes.split('\n').filter(l => l.trim()).length !== 1 ? 's' : ''}</p>
+                  )}
+                </>
+              ) : (
+                <div className="space-y-2">
+                  {/* Batch selector */}
+                  {quoteBatches.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      <button onClick={() => switchLibraryBatch(null)}
+                        className={cn("px-2.5 py-1 rounded-md border text-xs font-medium transition-all",
+                          !libraryBatch ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground")}>
+                        All
+                      </button>
+                      {quoteBatches.map(b => (
+                        <button key={b.id} onClick={() => switchLibraryBatch(b.id)}
+                          className={cn("px-2.5 py-1 rounded-md border text-xs font-medium transition-all",
+                            libraryBatch === b.id ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground")}>
+                          {b.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {libraryLoading ? (
+                    <div className="flex items-center justify-center py-6">
+                      <RefreshCw className="w-4 h-4 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : libraryQuotes.length === 0 ? (
+                    <div className="py-5 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
+                      No active quotes in your library.
+                      <br /><span className="text-xs">Add quotes in the Quotes tab.</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs text-muted-foreground">
+                          <span className="font-semibold text-foreground">{libraryQuotes.length}</span> active quote{libraryQuotes.length !== 1 ? 's' : ''} available
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          Will use <span className="font-semibold text-foreground">{Math.min(totalVideos, libraryQuotes.length)}</span> for {totalVideos} video{totalVideos !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                        {libraryQuotes.slice(0, totalVideos).map((q, i) => (
+                          <div key={q.id} className="flex items-start gap-2 px-3 py-2 rounded-md bg-primary/5 border border-primary/20 text-xs">
+                            <span className="text-primary font-mono font-semibold flex-shrink-0 w-4">{i + 1}</span>
+                            <span className="text-muted-foreground mono whitespace-pre-wrap break-words">{q.text}</span>
+                          </div>
+                        ))}
+                        {libraryQuotes.length > totalVideos && (
+                          <p className="text-xs text-muted-foreground/60 text-center pt-1">
+                            +{libraryQuotes.length - totalVideos} more won't be used this run
+                          </p>
+                        )}
+                      </div>
+                      <button onClick={() => loadLibraryQuotes(libraryBatch)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+                        <RefreshCw className="w-3 h-3" /> Refresh
+                      </button>
+                    </>
+                  )}
+                </div>
               )}
               <Separator />
               <div className="space-y-3">
@@ -635,30 +846,97 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
           </div>
 
           {/* Background Audio */}
-          <Card className={cn(audioFile && "border-primary/30")}>
+          <Card className={cn((audioFile || selectedAudioFiles.length > 0) && "border-primary/30")}>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Music className="w-4 h-4 text-primary" /> Background Audio
-                <Badge variant="secondary" className="text-xs">Optional</Badge>
-                {audioFile && <Badge className="text-xs bg-primary/20 text-primary border-primary/30">Active</Badge>}
-              </CardTitle>
-              <CardDescription>MP3 mixed into the output</CardDescription>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Music className="w-4 h-4 text-primary" /> Background Audio
+                    <Badge variant="secondary" className="text-xs">Optional</Badge>
+                    {audioMode === 'manual' && audioFile && <Badge className="text-xs bg-primary/20 text-primary border-primary/30">Active</Badge>}
+                    {audioMode === 'batch' && selectedAudioFiles.length > 0 && <Badge className="text-xs bg-primary/20 text-primary border-primary/30">{selectedAudioFiles.length} selected</Badge>}
+                  </CardTitle>
+                  <CardDescription>{audioMode === 'batch' ? 'Randomly picks one file per video from selected' : 'MP3 mixed into the output'}</CardDescription>
+                </div>
+                {/* Mode toggle */}
+                <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5 flex-shrink-0">
+                  <button onClick={() => switchAudioMode('manual')}
+                    className={cn("px-2.5 py-1 rounded-md text-xs font-medium transition-all", audioMode === 'manual' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                    Manual
+                  </button>
+                  <button onClick={() => switchAudioMode('batch')}
+                    className={cn("px-2.5 py-1 rounded-md text-xs font-medium transition-all", audioMode === 'batch' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                    Batch
+                  </button>
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => audioInputRef.current?.click()} disabled={uploadingAudio}>
-                  {uploadingAudio ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Music className="w-3 h-3" />}
-                  {audioFile ? 'Replace .mp3' : 'Upload .mp3'}
-                </Button>
-                {audioFile && (
-                  <>
-                    <span className="text-xs text-green-400 flex items-center gap-1 truncate max-w-[160px]"><Check className="w-3 h-3 flex-shrink-0" />{audioFile}</span>
-                    <button onClick={() => removeOverlay('audio')} className="text-muted-foreground hover:text-destructive transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
-                  </>
-                )}
-                <input ref={audioInputRef} type="file" accept=".mp3,.m4a,.wav" className="hidden"
-                  onChange={e => { if (e.target.files[0]) { audioPreviewRef.current?.pause(); setIsPlaying(false); uploadAudio(e.target.files[0]); } }} />
-              </div>
+              {/* Batch mode UI */}
+              {audioMode === 'batch' && (
+                <div className="space-y-3">
+                  {/* Batch selector */}
+                  {audioBatches.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-1">No audio batches yet — create one in the <strong>Audio</strong> tab.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {audioBatches.map(b => (
+                        <button key={b.id} onClick={() => selectAudioBatch(selectedAudioBatch === b.id ? null : b.id)}
+                          className={cn("px-2.5 py-1 rounded-md border text-xs font-medium transition-all", selectedAudioBatch === b.id ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground")}>
+                          {b.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {/* File selector */}
+                  {selectedAudioBatch && (
+                    loadingAudioBatch ? (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                        <RefreshCw className="w-3 h-3 animate-spin" /> Loading files…
+                      </div>
+                    ) : audioBatchFiles.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No audio files in this batch.</p>
+                    ) : (
+                      <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-xs text-muted-foreground">{selectedAudioFiles.length} / {audioBatchFiles.length} selected — one picked randomly per video</p>
+                          <button onClick={() => setSelectedAudioFiles(selectedAudioFiles.length === audioBatchFiles.length ? [] : [...audioBatchFiles])}
+                            className="text-[10px] text-primary hover:underline">
+                            {selectedAudioFiles.length === audioBatchFiles.length ? 'Deselect all' : 'Select all'}
+                          </button>
+                        </div>
+                        {audioBatchFiles.map(f => (
+                          <button key={f} onClick={() => toggleAudioFile(f)}
+                            className={cn("w-full flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs text-left transition-all",
+                              selectedAudioFiles.includes(f) ? "border-primary/50 bg-primary/5 text-foreground" : "border-border text-muted-foreground hover:text-foreground")}>
+                            <div className={cn("w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center",
+                              selectedAudioFiles.includes(f) ? "border-primary bg-primary" : "border-border")}>
+                              {selectedAudioFiles.includes(f) && <Check className="w-2 h-2 text-primary-foreground" />}
+                            </div>
+                            <Music className="w-3 h-3 flex-shrink-0 opacity-50" />
+                            <span className="font-mono truncate">{f}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+              {audioMode === 'manual' && <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="outline" size="sm" onClick={() => audioInputRef.current?.click()} disabled={uploadingAudio}>
+                    {uploadingAudio ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Music className="w-3 h-3" />}
+                    {audioFile ? 'Replace .mp3' : 'Upload .mp3'}
+                  </Button>
+                  {audioFile && (
+                    <>
+                      <span className="text-xs text-green-400 flex items-center gap-1 truncate max-w-[160px]"><Check className="w-3 h-3 flex-shrink-0" />{audioFile}</span>
+                      <button onClick={() => removeOverlay('audio')} className="text-muted-foreground hover:text-destructive transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                    </>
+                  )}
+                  <input ref={audioInputRef} type="file" accept=".mp3,.m4a,.wav" className="hidden"
+                    onChange={e => { if (e.target.files[0]) { audioPreviewRef.current?.pause(); setIsPlaying(false); uploadAudio(e.target.files[0]); } }} />
+                </div>
               {audioFile && (
                 <>
                   <audio ref={audioPreviewRef} src={`${API}/overlays/${audioFile}`} preload="metadata"
@@ -712,6 +990,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                   </div>
                 </>
               )}
+              </>}
             </CardContent>
           </Card>
 
@@ -804,9 +1083,14 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                     {batchFiles.videos.length > 0 && <Badge variant="secondary" className="text-xs flex-shrink-0">{batchFiles.videos.length}v</Badge>}
                     {batchFiles.images.length > 0 && <Badge variant="secondary" className="text-xs flex-shrink-0">{batchFiles.images.length}i</Badge>}
                   </div>
-                  <button onClick={() => setShowBatchPicker(true)} className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1 flex-shrink-0 ml-2">
-                    Switch
-                  </button>
+                  <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                    <button onClick={() => setShowBatchPicker(true)} className="text-xs text-muted-foreground hover:text-primary transition-colors border border-border hover:border-primary/40 rounded-md px-2.5 py-1">
+                      Switch
+                    </button>
+                    <button onClick={() => onSelectBatch(null)} className="text-xs text-muted-foreground hover:text-destructive transition-colors border border-border hover:border-destructive/40 rounded-md px-2.5 py-1">
+                      Remove
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <button onClick={() => setShowBatchPicker(true)} className="w-full flex items-center justify-center gap-2 h-12 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 hover:border-primary/70 transition-all text-primary font-semibold text-sm">
@@ -837,7 +1121,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                {batchFiles.videos.length > 0 && (
+                {batchFiles.videos.length > 0 && batchType !== 'image' && (
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <Label className="text-xs uppercase tracking-widest text-muted-foreground">Videos</Label>
@@ -870,7 +1154,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                     )}
                   </div>
                 )}
-                {batchFiles.images.length > 0 && (
+                {batchFiles.images.length > 0 && batchType !== 'video' && (
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <Label className="text-xs uppercase tracking-widest text-muted-foreground">Images</Label>
