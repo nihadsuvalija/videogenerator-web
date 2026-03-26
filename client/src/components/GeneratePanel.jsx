@@ -10,7 +10,7 @@ import LayoutEditor from './LayoutEditor';
 import {
   Clapperboard, Play, Pause, Upload, RefreshCw, Check, AlertCircle,
   Download, Trash2, Music, Monitor, FileText, Sliders, Lock, X, Type, Sparkles,
-  Film, Image, Volume2, VolumeX, Scissors, LayoutGrid, List, Eye, Hash, StopCircle, BookOpen,
+  Film, Image, Volume2, VolumeX, Scissors, LayoutGrid, List, Eye, StopCircle, BookOpen, ChevronDown,
 } from 'lucide-react';
 import { Button } from './ui-button';
 import {
@@ -66,6 +66,8 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
   const [selectedVideos, setSelectedVideos]     = useState([]);
   const [selectedImages, setSelectedImages]     = useState([]);
   const [fileViewMode, setFileViewMode]         = useState('grid'); // 'list' | 'grid'
+  const [videoFilePage, setVideoFilePage]       = useState(0);
+  const [imageFilePage, setImageFilePage]       = useState(0);
   const [fileLightboxSrc, setFileLightboxSrc]   = useState(null);
   const [showBatchPicker, setShowBatchPicker]   = useState(false);
   const [logoFile, setLogoFile]                 = useState(null);
@@ -91,6 +93,10 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
 
   const [localLayouts, setLocalLayouts]         = useState({ '1920x1080': DEFAULT_VIDEO_LAYOUT });
   const [activeLayoutRes, setActiveLayoutRes]   = useState('1920x1080');
+
+  const [logOpen, setLogOpen]                   = useState(false);
+  const [rightOpen, setRightOpen]               = useState({ resolution: false, config: false, filter: false, quotes: false, logo: false, subtitles: false, audio: false });
+  const toggleRight = (key) => setRightOpen(prev => ({ ...prev, [key]: !prev[key] }));
 
   const [generating, setGenerating]             = useState(false);
   const [jobIds, setJobIds]                     = useState([]);
@@ -289,6 +295,8 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
         .then(r => r.json())
         .then(data => {
           setBatchFiles(data);
+          setVideoFilePage(0);
+          setImageFilePage(0);
           // Auto-detect batch type and lock mediaType accordingly
           const bt = data.videos.length > 0 && data.images.length === 0 ? 'video'
             : data.images.length > 0 && data.videos.length === 0 ? 'image'
@@ -394,6 +402,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
     setGenerating(true);
     setJobs([]);
     setJobIds([]);
+    setLogOpen(true);
     try {
       // Resolve quotes: pull from library if in library mode
       let resolvedQuotes = quotes;
@@ -474,71 +483,31 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
 
   // Pre-compute generate button label (avoid IIFE in JSX)
   const totalVideos = selectedResolutions.reduce((sum, r) => sum + (resolutionCounts[r] ?? 1), 0);
-  return (
-    <div className="space-y-4">
 
-      {/* ── 3-column layout: Batch+Log | Layout Editor | Config ── */}
-      <div className="grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,360px)] gap-5 xl:h-[calc(100vh-7rem)]">
+  const FILE_PAGE_SIZE = 24;
+  const videoPageCount = Math.ceil(batchFiles.videos.length / FILE_PAGE_SIZE);
+  const imagePageCount = Math.ceil(batchFiles.images.length / FILE_PAGE_SIZE);
+  const pagedVideos = batchFiles.videos.slice(videoFilePage * FILE_PAGE_SIZE, (videoFilePage + 1) * FILE_PAGE_SIZE);
+  const pagedImages = batchFiles.images.slice(imageFilePage * FILE_PAGE_SIZE, (imageFilePage + 1) * FILE_PAGE_SIZE);
 
-        {/* ── COL 1 (DOM): Layout Editor → center ──────────────────────────── */}
-        <div className="space-y-4 min-w-0 xl:order-2 col-scroll xl:pb-4">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Hash className="w-4 h-4 text-primary" /> Layout Editor
-              </CardTitle>
-              <CardDescription>
-                Drag elements to reposition · Select an element to adjust alignment, font &amp; bold
-                {!activePreset && ' · Changes are local until a preset is applied'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {selectedResolutions.length > 1 && (
-                <div className="flex flex-wrap gap-1 mb-3">
-                  {selectedResolutions.map(res => (
-                    <button key={res} onClick={() => setActiveLayoutRes(res)}
-                      className={cn(
-                        "px-3 py-1 rounded-md text-xs font-mono font-semibold transition-all border",
-                        activeLayoutRes === res
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "bg-secondary text-muted-foreground border-border hover:text-foreground hover:border-primary/40"
-                      )}>
-                      {RESOLUTION_ICONS[res] && <span className="mr-1">{RESOLUTION_ICONS[res]}</span>}{res}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <LayoutEditor
-                key={activeLayoutRes}
-                preset={layoutPreset}
-                onLayoutChange={handleLayoutChange}
-                onFontChange={(patch) => { if (patch.fontFamily) { setAndSaveFontFamily(patch.fontFamily); } }}
-                previewBgUrl={previewBgUrl}
-                previewBgIsVideo={previewBgIsVideo}
-                stacked
-                locked={locked}
-                previewText={quotesMode === 'library' ? libraryQuotes[0]?.text : quotes.split('\n').find(l => l.trim())}
-                imageFilter={imageFilter}
-              />
-            </CardContent>
-          </Card>
-        </div>{/* end COL 1 */}
-
-        {/* ── COL 2 (DOM): Config → right ──────────────────────────────────── */}
-        <div className="space-y-4 min-w-0 xl:order-3 col-scroll xl:pb-4">
+  const layoutSidebarContent = (
+    <>
 
           {/* Resolution */}
           <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Monitor className="w-4 h-4 text-primary" /> Resolution
-                {selectedResolutions.length > 1 && (
-                  <Badge className="text-xs bg-primary/20 text-primary border-primary/30">{selectedResolutions.length} resolutions</Badge>
-                )}
-              </CardTitle>
+            <CardHeader className="px-4 pt-4 pb-3 cursor-pointer select-none" onClick={() => toggleRight('resolution')}>
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Monitor className="w-4 h-4 text-primary" /> Resolution
+                  {selectedResolutions.length > 1 && (
+                    <Badge className="text-xs bg-primary/20 text-primary border-primary/30">{selectedResolutions.length} resolutions</Badge>
+                  )}
+                </CardTitle>
+                <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform duration-200 flex-shrink-0", rightOpen.resolution && "rotate-180")} />
+              </div>
               <CardDescription>Each selected resolution generates a separate video</CardDescription>
             </CardHeader>
-            <CardContent>
+            {rightOpen.resolution && <CardContent className="px-4 pb-4">
               <div className="grid grid-cols-1 gap-2">
                 {availableResolutions.map(r => {
                   const selected = selectedResolutions.includes(r.key);
@@ -571,16 +540,19 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                   );
                 })}
               </div>
-            </CardContent>
+            </CardContent>}
           </Card>
 
           {/* Generation Config */}
           <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Generation Config</CardTitle>
+            <CardHeader className="px-4 pt-4 pb-3 cursor-pointer select-none" onClick={() => toggleRight('config')}>
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base">Generation Config</CardTitle>
+                <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform duration-200 flex-shrink-0", rightOpen.config && "rotate-180")} />
+              </div>
               <CardDescription>Media type and timing settings</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+            {rightOpen.config && <CardContent className="px-4 pb-4 space-y-4">
               <div className="space-y-2">
                 <Label className="text-xs uppercase tracking-widest text-muted-foreground">Source Media</Label>
                 {batchType && batchType !== 'mixed' ? (
@@ -633,37 +605,36 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                     onBlur={e => { if (e.target.value === '' || isNaN(Number(e.target.value))) setAndSavePreferredDuration('0'); }} />
                 </div>
               </div>
-            </CardContent>
+            </CardContent>}
           </Card>
 
           {/* Filter */}
           <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <span className="text-base">🎨</span> Color Filter
-              </CardTitle>
+            <CardHeader className="px-4 pt-4 pb-3 cursor-pointer select-none" onClick={() => toggleRight('filter')}>
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <span className="text-base">🎨</span> Color Filter
+                </CardTitle>
+                <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform duration-200 flex-shrink-0", rightOpen.filter && "rotate-180")} />
+              </div>
               <CardDescription>Apply a cinematic tint or color grade to the media</CardDescription>
             </CardHeader>
-            <CardContent>
+            {rightOpen.filter && <CardContent className="px-4 pb-4">
               <FilterPicker value={imageFilter} onChange={setImageFilter} disabled={locked} />
-            </CardContent>
+            </CardContent>}
           </Card>
 
           {/* Quotes & Text */}
           <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-primary" /> Quotes &amp; Text
-                  </CardTitle>
-                  <CardDescription>
-                    {quotesMode === 'library' ? 'Using quotes from your library' : 'One per line — each video picks one at random'}
-                  </CardDescription>
-                </div>
+            <CardHeader className="px-4 pt-4 pb-3">
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <CardTitle className="text-base flex items-center gap-2 min-w-0 truncate">
+                  <FileText className="w-4 h-4 text-primary flex-shrink-0" /> Quotes &amp; Text
+                </CardTitle>
+                <div className="flex items-center gap-1 flex-shrink-0">
                 {quotesMode === 'manual' && (
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {srtFile && <span className="text-xs text-yellow-400 hidden sm:flex items-center gap-1"><FileText className="w-3 h-3" /> SRT overrides</span>}
+                  <div className="flex items-center gap-1">
+                    {srtFile && <span className="text-xs text-yellow-400 flex items-center gap-1"><FileText className="w-3 h-3" /></span>}
                     <Button variant="outline" size="sm" disabled={!!srtFile || generatingQuotes}
                       onClick={async () => {
                         setAiQuoteError(null); setGeneratingQuotes(true);
@@ -674,7 +645,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                           setAndSaveQuotes(data.quotes.join('\n'));
                         } catch (e) { setAiQuoteError(e.message); } finally { setGeneratingQuotes(false); }
                       }}
-                      className="h-7 px-2.5 text-xs gap-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white border-0 shadow-md shadow-violet-500/20 disabled:opacity-50"
+                      className="h-7 px-2 text-xs gap-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white border-0 shadow-md shadow-violet-500/20 disabled:opacity-50"
                     >
                       {generatingQuotes ? <><RefreshCw className="w-3 h-3 animate-spin" /> AI…</> : <><Sparkles className="w-3 h-3" /> AI ({totalVideos})</>}
                     </Button>
@@ -685,9 +656,16 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                       onChange={e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = ev => setAndSaveQuotes(ev.target.result); r.readAsText(f); e.target.value = ''; }} />
                   </div>
                 )}
+                <button onClick={e => { e.stopPropagation(); toggleRight('quotes'); }} className="p-0.5 text-muted-foreground hover:text-foreground transition-colors rounded">
+                  <ChevronDown className={cn("w-4 h-4 transition-transform duration-200", rightOpen.quotes && "rotate-180")} />
+                </button>
+                </div>
               </div>
+              <CardDescription className="text-xs">
+                {quotesMode === 'library' ? 'Using quotes from your library' : 'One per line — each video picks one'}
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+            {rightOpen.quotes && <CardContent className="px-4 pb-4 space-y-4">
               {/* Mode toggle */}
               <div className="flex gap-1.5 bg-secondary rounded-lg p-1">
                 <button onClick={() => switchQuotesMode('manual')}
@@ -795,83 +773,99 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                   </div>
                 </div>
               </div>
-            </CardContent>
+            </CardContent>}
           </Card>
 
-          {/* Logo + Subtitles */}
-          <div className="grid grid-cols-2 gap-4">
-            <Card>
-              <CardHeader className="pb-3">
+          {/* Logo */}
+          <Card>
+            <CardHeader className="px-4 pt-4 pb-2 cursor-pointer select-none" onClick={() => toggleRight('logo')}>
+              <div className="flex items-center justify-between gap-2">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Upload className="w-4 h-4 text-primary" /> Logo
                 </CardTitle>
-                <CardDescription>Overlaid on every video</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="outline" size="sm" onClick={() => logoInputRef.current?.click()} disabled={uploadingLogo}>
-                    {uploadingLogo ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
-                    {logoFile ? 'Replace' : 'Upload'}
-                  </Button>
-                  {logoFile && <span className="text-xs text-green-400 flex items-center gap-1 truncate max-w-[120px]"><Check className="w-3 h-3 flex-shrink-0" />{logoFile}</span>}
-                  <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={e => e.target.files[0] && uploadLogo(e.target.files[0])} />
+                <div className="flex items-center gap-2">
+                  <CardDescription className="text-xs">Overlaid on every video</CardDescription>
+                  <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform duration-200 flex-shrink-0", rightOpen.logo && "rotate-180")} />
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </CardHeader>
+            {rightOpen.logo && <CardContent className="px-4 pb-4 pt-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => logoInputRef.current?.click()} disabled={uploadingLogo}>
+                  {uploadingLogo ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+                  {logoFile ? 'Replace' : 'Upload'}
+                </Button>
+                {logoFile && <span className="text-xs text-green-400 flex items-center gap-1 truncate min-w-0"><Check className="w-3 h-3 flex-shrink-0" />{logoFile}</span>}
+                <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={e => e.target.files[0] && uploadLogo(e.target.files[0])} />
+              </div>
+            </CardContent>}
+          </Card>
 
-            <Card className={cn(srtFile && "border-yellow-500/30")}>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-primary" /> Subtitles
-                  {srtFile && <Badge className="text-xs bg-yellow-500/20 text-yellow-400 border-yellow-500/30">Active</Badge>}
-                </CardTitle>
-                <CardDescription>SRT overrides quote text</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="outline" size="sm" onClick={() => srtInputRef.current?.click()} disabled={uploadingSrt}>
-                    {uploadingSrt ? <RefreshCw className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
-                    {srtFile ? 'Replace' : 'Upload .srt'}
-                  </Button>
-                  {srtFile && (
-                    <>
-                      <span className="text-xs text-yellow-400 flex items-center gap-1 truncate max-w-[80px]"><Check className="w-3 h-3 flex-shrink-0" />{srtFile}</span>
-                      <button onClick={() => removeOverlay('srt')} className="text-muted-foreground hover:text-destructive transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
-                    </>
-                  )}
-                  <input ref={srtInputRef} type="file" accept=".srt" className="hidden" onChange={e => e.target.files[0] && uploadSrt(e.target.files[0])} />
+          {/* Subtitles / SRT */}
+          <Card className={cn(srtFile && "border-yellow-500/30")}>
+            <CardHeader className="px-4 pt-4 pb-2 cursor-pointer select-none" onClick={() => toggleRight('subtitles')}>
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <CardTitle className="text-base flex items-center gap-2 min-w-0">
+                    <FileText className="w-4 h-4 text-primary flex-shrink-0" /> Subtitles
+                  </CardTitle>
+                  {srtFile && <Badge className="text-xs bg-yellow-500/20 text-yellow-400 border-yellow-500/30 flex-shrink-0">Active</Badge>}
                 </div>
-              </CardContent>
-            </Card>
-          </div>
+                <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform duration-200 flex-shrink-0", rightOpen.subtitles && "rotate-180")} />
+              </div>
+              <CardDescription>SRT overrides quote text</CardDescription>
+            </CardHeader>
+            {rightOpen.subtitles && <CardContent className="px-4 pb-4 pt-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => srtInputRef.current?.click()} disabled={uploadingSrt}>
+                  {uploadingSrt ? <RefreshCw className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
+                  {srtFile ? 'Replace' : 'Upload .srt'}
+                </Button>
+                {srtFile && (
+                  <>
+                    <span className="text-xs text-yellow-400 flex items-center gap-1 truncate min-w-0"><Check className="w-3 h-3 flex-shrink-0" />{srtFile}</span>
+                    <button onClick={() => removeOverlay('srt')} className="text-muted-foreground hover:text-destructive transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </>
+                )}
+                <input ref={srtInputRef} type="file" accept=".srt" className="hidden" onChange={e => e.target.files[0] && uploadSrt(e.target.files[0])} />
+              </div>
+            </CardContent>}
+          </Card>
 
-          {/* Background Audio */}
+    </>
+  );
+
+  const audioCard = (
           <Card className={cn((audioFile || selectedAudioFiles.length > 0) && "border-primary/30")}>
             <CardHeader className="pb-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Music className="w-4 h-4 text-primary" /> Background Audio
-                    <Badge variant="secondary" className="text-xs">Optional</Badge>
-                    {audioMode === 'manual' && audioFile && <Badge className="text-xs bg-primary/20 text-primary border-primary/30">Active</Badge>}
-                    {audioMode === 'batch' && selectedAudioFiles.length > 0 && <Badge className="text-xs bg-primary/20 text-primary border-primary/30">{selectedAudioFiles.length} selected</Badge>}
-                  </CardTitle>
-                  <CardDescription>{audioMode === 'batch' ? 'Randomly picks one file per video from selected' : 'MP3 mixed into the output'}</CardDescription>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Music className="w-4 h-4 text-primary flex-shrink-0" />
+                  <CardTitle className="text-base truncate">Background Audio</CardTitle>
+                  <Badge variant="secondary" className="text-xs flex-shrink-0">Optional</Badge>
+                  {audioMode === 'manual' && audioFile && <Badge className="text-xs bg-primary/20 text-primary border-primary/30 flex-shrink-0">Active</Badge>}
+                  {audioMode === 'batch' && selectedAudioFiles.length > 0 && <Badge className="text-xs bg-primary/20 text-primary border-primary/30 flex-shrink-0">{selectedAudioFiles.length} sel.</Badge>}
                 </div>
+                <button onClick={() => toggleRight('audio')} className="p-0.5 text-muted-foreground hover:text-foreground transition-colors rounded flex-shrink-0">
+                  <ChevronDown className={cn("w-4 h-4 transition-transform duration-200", rightOpen.audio && "rotate-180")} />
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-2 mt-1">
+                <CardDescription className="text-xs">{audioMode === 'batch' ? 'Random per video from selected' : 'MP3 mixed into output'}</CardDescription>
                 {/* Mode toggle */}
                 <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5 flex-shrink-0">
                   <button onClick={() => switchAudioMode('manual')}
-                    className={cn("px-2.5 py-1 rounded-md text-xs font-medium transition-all", audioMode === 'manual' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                    className={cn("px-2 py-1 rounded-md text-xs font-medium transition-all", audioMode === 'manual' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
                     Manual
                   </button>
                   <button onClick={() => switchAudioMode('batch')}
-                    className={cn("px-2.5 py-1 rounded-md text-xs font-medium transition-all", audioMode === 'batch' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                    className={cn("px-2 py-1 rounded-md text-xs font-medium transition-all", audioMode === 'batch' ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
                     Batch
                   </button>
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="space-y-4">
+            {rightOpen.audio && <CardContent className="space-y-4">
               {/* Batch mode UI */}
               {audioMode === 'batch' && (
                 <div className="space-y-3">
@@ -991,13 +985,18 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                 </>
               )}
               </>}
-            </CardContent>
+            </CardContent>}
           </Card>
+  );
 
-        </div>{/* end COL 2 */}
+  return (
+    <div className="flex flex-col xl:h-[calc(100vh-5rem)] gap-3">
 
-        {/* ── COL 3 (DOM): Batch + Generate + Log → left ───────────────────── */}
-        <div className="flex flex-col gap-4 xl:order-1 col-scroll xl:pb-4 [will-change:transform]">
+      {/* ── 3-column layout: Batches | Layout Editor | Config ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr_380px] gap-4 flex-1 min-h-0">
+
+        {/* ── LEFT col (DOM first): Presets, banner, batch, files, log ── */}
+        <div className="flex flex-col gap-2 xl:order-1 col-scroll min-h-0 [will-change:transform]">
 
           {/* Preset picker */}
           {presets && presets.length > 0 && (
@@ -1132,8 +1131,8 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                       </div>
                     </div>
                     {fileViewMode === 'list' ? (
-                      <div className="grid gap-1 max-h-40 overflow-y-auto pr-1">
-                        {batchFiles.videos.map(f => (
+                      <div className="grid gap-1">
+                        {pagedVideos.map(f => (
                           <FileToggle key={f} name={f} selected={selectedVideos.includes(f)}
                             onToggle={() => setAndSaveVideos(selectedVideos.includes(f) ? selectedVideos.filter(x => x !== f) : [...selectedVideos, f])}
                             color="blue" />
@@ -1141,7 +1140,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                       </div>
                     ) : (
                       <div style={{ columns: '3 80px', columnGap: 6 }}>
-                        {batchFiles.videos.map(f => (
+                        {pagedVideos.map(f => (
                           <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
                             <BatchFileGridCell name={f}
                               src={`${API}/batches-media/${selectedBatch}/videos/${encodeURIComponent(f)}`}
@@ -1151,6 +1150,9 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                           </div>
                         ))}
                       </div>
+                    )}
+                    {videoPageCount > 1 && (
+                      <FilePagination page={videoFilePage} pageCount={videoPageCount} onPage={setVideoFilePage} total={batchFiles.videos.length} />
                     )}
                   </div>
                 )}
@@ -1165,8 +1167,8 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                       </div>
                     </div>
                     {fileViewMode === 'list' ? (
-                      <div className="grid gap-1 max-h-40 overflow-y-auto pr-1">
-                        {batchFiles.images.map(f => (
+                      <div className="grid gap-1">
+                        {pagedImages.map(f => (
                           <FileToggle key={f} name={f} selected={selectedImages.includes(f)}
                             onToggle={() => setAndSaveImages(selectedImages.includes(f) ? selectedImages.filter(x => x !== f) : [...selectedImages, f])}
                             color="purple" />
@@ -1174,7 +1176,7 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                       </div>
                     ) : (
                       <div style={{ columns: '3 80px', columnGap: 6 }}>
-                        {batchFiles.images.map(f => (
+                        {pagedImages.map(f => (
                           <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
                             <BatchFileGridCell name={f}
                               src={`${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(f)}`}
@@ -1185,6 +1187,9 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
                         ))}
                       </div>
                     )}
+                    {imagePageCount > 1 && (
+                      <FilePagination page={imageFilePage} pageCount={imagePageCount} onPage={setImageFilePage} total={batchFiles.images.length} />
+                    )}
                   </div>
                 )}
                 {batchFiles.videos.length === 0 && batchFiles.images.length === 0 && (
@@ -1194,55 +1199,95 @@ export default function GeneratePanel({ selectedBatch, onSelectBatch, batches = 
             </Card>
           )}
 
-          {/* Generate button */}
-          <Button className="w-full h-14 text-base font-bold gap-2 shadow-lg"
-            onClick={generate} disabled={generating || !hasContent}>
-            {generating ? (
-              <><RefreshCw className="w-5 h-5 animate-spin" /> Generating…</>
-            ) : (
-              <><Play className="w-5 h-5" /> Generate {totalVideos > 1 ? `${totalVideos} Videos` : 'Video'}</>
-            )}
-          </Button>
-
-          {/* Generation log */}
-          <div className="rounded-xl border border-border overflow-hidden bg-card flex flex-col flex-1 min-h-0">
-            <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center justify-between flex-shrink-0">
-              <div className="flex items-center gap-2">
-                <Clapperboard className="w-4 h-4 text-primary" />
-                <span className="text-sm font-semibold">Generation Log</span>
-              </div>
-              {jobs.length > 0 && (
-                <Badge variant="secondary" className="text-xs">
-                  {jobs.filter(j => j.status === 'running').length > 0
-                    ? `${jobs.filter(j => j.status === 'running').length} running`
-                    : `${jobs.length} job${jobs.length !== 1 ? 's' : ''}`}
-                </Badge>
-              )}
-            </div>
-            {jobs.length === 0 ? (
-              <div className="flex flex-col items-center justify-center flex-1 px-6 text-center">
-                <div className="w-10 h-10 rounded-full bg-secondary/50 flex items-center justify-center mb-3">
-                  <Play className="w-4 h-4 text-muted-foreground/50" />
-                </div>
-                <p className="text-sm font-medium text-muted-foreground">Ready to generate</p>
-                <p className="text-xs text-muted-foreground/60 mt-1">
-                  {!selectedBatch ? 'Select a batch to get started' : !hasContent ? 'Select files from the batch' : 'Click Generate when ready'}
-                </p>
-              </div>
-            ) : (
-              <div className="p-3 space-y-3 overflow-y-auto flex-1">
-                {jobs.map(j => <JobStatus key={j.id} job={j} />)}
-              </div>
-            )}
-          </div>
-
           {fileLightboxSrc && (
             <MediaLightbox src={fileLightboxSrc} onClose={() => setFileLightboxSrc(null)} />
           )}
 
-        </div>{/* end COL 3 */}
+        </div>{/* end LEFT col */}
+
+        {/* ── CENTER col: Layout Editor ── */}
+        <div className="min-w-0 xl:order-2 overflow-hidden flex flex-col gap-2 min-h-0">
+          {selectedResolutions.length > 1 && (
+            <div className="flex flex-wrap gap-1 mb-1">
+              {selectedResolutions.map(res => (
+                <button key={res} onClick={() => setActiveLayoutRes(res)}
+                  className={cn(
+                    "px-3 py-1 rounded-md text-xs font-mono font-semibold transition-all border",
+                    activeLayoutRes === res
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-secondary text-muted-foreground border-border hover:text-foreground hover:border-primary/40"
+                  )}>
+                  {RESOLUTION_ICONS[res] && <span className="mr-1">{RESOLUTION_ICONS[res]}</span>}{res}
+                </button>
+              ))}
+            </div>
+          )}
+          <LayoutEditor
+            key={activeLayoutRes}
+            preset={layoutPreset}
+            onLayoutChange={handleLayoutChange}
+            onFontChange={(patch) => { if (patch.fontFamily) { setAndSaveFontFamily(patch.fontFamily); } }}
+            previewBgUrl={previewBgUrl}
+            previewBgIsVideo={previewBgIsVideo}
+            locked={locked}
+            previewText={quotesMode === 'library' ? libraryQuotes[0]?.text : quotes.split('\n').find(l => l.trim())}
+            imageFilter={imageFilter}
+            sidebarDefaultOpen={false}
+            generateButton={
+              <Button className="w-full h-14 text-base font-bold gap-2 shadow-lg"
+                onClick={generate} disabled={generating || !hasContent}>
+                {generating ? (
+                  <><RefreshCw className="w-5 h-5 animate-spin" /> Generating…</>
+                ) : (
+                  <><Play className="w-5 h-5" /> Generate {totalVideos > 1 ? `${totalVideos} Videos` : 'Video'}</>
+                )}
+              </Button>
+            }
+          />
+        </div>{/* end CENTER col */}
+
+        {/* ── RIGHT col: Configuration parameters ── */}
+        <div className="flex flex-col gap-2 xl:order-3 col-scroll min-h-0">
+          {layoutSidebarContent}
+          {audioCard}
+        </div>{/* end RIGHT col */}
 
       </div>{/* end grid */}
+
+      {/* ── Generation log — full width below both columns ── */}
+      <div className={cn("flex-shrink-0 rounded-xl border border-border overflow-hidden bg-card flex flex-col", logOpen && "h-52")}>
+        <button onClick={() => setLogOpen(v => !v)} className="px-4 py-2.5 flex items-center justify-between w-full text-left hover:bg-secondary/20 transition-colors">
+          <div className="flex items-center gap-2">
+            <Clapperboard className="w-4 h-4 text-primary" />
+            <span className="text-sm font-semibold">Generation Log</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {jobs.length > 0 && (
+              <Badge variant="secondary" className="text-xs">
+                {jobs.filter(j => j.status === 'running').length > 0
+                  ? `${jobs.filter(j => j.status === 'running').length} running`
+                  : `${jobs.length} job${jobs.length !== 1 ? 's' : ''}`}
+              </Badge>
+            )}
+            <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform duration-200", logOpen && "rotate-180")} />
+          </div>
+        </button>
+        {logOpen && (jobs.length === 0 ? (
+          <div className="flex flex-col items-center justify-center flex-1 px-6 text-center border-t border-border">
+            <div className="w-10 h-10 rounded-full bg-secondary/50 flex items-center justify-center mb-3">
+              <Play className="w-4 h-4 text-muted-foreground/50" />
+            </div>
+            <p className="text-sm font-medium text-muted-foreground">Ready to generate</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">
+              {!selectedBatch ? 'Select a batch to get started' : !hasContent ? 'Select files from the batch' : 'Click Generate when ready'}
+            </p>
+          </div>
+        ) : (
+          <div className="p-3 space-y-3 overflow-y-auto flex-1 border-t border-border">
+            {jobs.map(j => <JobStatus key={j.id} job={j} />)}
+          </div>
+        ))}
+      </div>
 
       {showBatchPicker && (
         <BatchPickerModal
@@ -1630,6 +1675,26 @@ function BatchFileGridCell({ name, src, isVideo, selected, onToggle, onPreview }
         </div>
         <p className="text-[9px] text-white font-mono leading-tight line-clamp-2 break-all">{name}</p>
       </div>
+    </div>
+  );
+}
+
+function FilePagination({ page, pageCount, onPage, total }) {
+  return (
+    <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
+      <button
+        onClick={() => onPage(p => Math.max(0, p - 1))}
+        disabled={page === 0}
+        className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed px-2 py-1 rounded border border-border hover:border-primary/40 transition-all"
+      >← Prev</button>
+      <span className="text-xs text-muted-foreground">
+        {page + 1} / {pageCount} <span className="text-muted-foreground/50">({total})</span>
+      </span>
+      <button
+        onClick={() => onPage(p => Math.min(pageCount - 1, p + 1))}
+        disabled={page === pageCount - 1}
+        className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed px-2 py-1 rounded border border-border hover:border-primary/40 transition-all"
+      >Next →</button>
     </div>
   );
 }

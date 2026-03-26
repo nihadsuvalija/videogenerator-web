@@ -3,6 +3,7 @@ import {
   Move, Image, Type, Upload, Trash2, RefreshCw, Check,
   Eye, EyeOff, Lock, Unlock, Plus, X, ChevronDown,
   AlignLeft, AlignCenter, AlignRight, Bold,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import FontPicker from './FontPicker';
 import { Button } from './ui-button';
@@ -35,7 +36,7 @@ const ASPECT_RATIOS = {
 };
 
 const CANVAS_W = 640; // default display width in px
-const MAX_CANVAS_H = () => Math.floor(window.innerHeight * 0.72);
+const MAX_CANVAS_H = () => Math.floor(window.innerHeight * 0.52);
 
 function getCanvasH(resolution, cw = CANVAS_W) {
   const ratio = ASPECT_RATIOS[resolution] || (16 / 9);
@@ -51,21 +52,31 @@ function constrainCanvasW(containerW, resolution) {
   return containerW;
 }
 
-// Element types rendered on canvas
-// type: 'logo' | 'subtitle' | 'overlay'
-// x, y: 0-100% of canvas (center point)
-// w: 0-100% of canvas width
-
-export default function LayoutEditor({ preset, onLayoutChange, onFontChange, previewBgUrl, previewBgIsVideo, stacked = false, locked = false, previewText, imageFilter = 'none' }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Main component
+// Props:
+//   sidebarContent  – ReactNode appended after built-in controls in the sidebar
+//   generateButton  – ReactNode rendered below the canvas (e.g. the generate btn)
+//   sidebarDefaultOpen – bool, default true
+// ─────────────────────────────────────────────────────────────────────────────
+export default function LayoutEditor({
+  preset, onLayoutChange, onFontChange,
+  previewBgUrl, previewBgIsVideo,
+  stacked = false, locked = false,
+  previewText, imageFilter = 'none',
+  sidebarContent, generateButton, sidebarDefaultOpen = true,
+}) {
   const resolution = preset?.resolution || '1920x1080';
   const layout     = preset?.layout || {};
 
-  // In stacked mode the canvas fills its container; otherwise fixed CANVAS_W
-  const outerRef  = useRef();
-  const [canvasW, setCanvasW] = useState(CANVAS_W);
+  // ── Sizing ─────────────────────────────────────────────────────────────────
+  const outerRef          = useRef();
+  const canvasContainerRef = useRef();
+  const [canvasW, setCanvasW]       = useState(CANVAS_W);
+  const [sidebarOpen, setSidebarOpen] = useState(sidebarDefaultOpen ?? true);
+
   useEffect(() => {
-    if (!stacked) { setCanvasW(CANVAS_W); return; }
-    const el = outerRef.current;
+    const el = canvasContainerRef.current;
     if (!el) return;
     const update = (w) => {
       const cw = constrainCanvasW(w, resolution);
@@ -77,16 +88,16 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [stacked, resolution]);
+  }, [resolution]);
 
   const canvasH = getCanvasH(resolution, canvasW);
 
-  // Local element state derived from preset layout
+  // ── Element state ───────────────────────────────────────────────────────────
   const [elements, setElements]       = useState(() => buildElements(layout, preset));
   const [fontFamily, setFontFamily]   = useState(preset?.fontFamily || 'default');
-  const [selected, setSelected]       = useState(null);  // element id
-  const [dragging, setDragging]  = useState(null);  // { id, startMouseX, startMouseY, startX, startY }
-  const [resizing, setResizing]  = useState(null);  // { id, startMouseX, startW }
+  const [selected, setSelected]       = useState(null);
+  const [dragging, setDragging]       = useState(null);
+  const [resizing, setResizing]       = useState(null);
   const [uploadingOverlay, setUploadingOverlay] = useState(false);
   const [dimBackground, setDimBackground] = useState(layout?.dimBackground ?? 0);
   const [grain, setGrain]                = useState(layout?.grain ?? 0);
@@ -114,7 +125,7 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
     setElements(prev => prev.map(el => el.id === 'logo' ? { ...el, src } : el));
   }, [preset?.logoFile]);
 
-  // Debounced save back to parent
+  // ── Debounced save ──────────────────────────────────────────────────────────
   const scheduleLayout = useCallback((newElements) => {
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(() => {
@@ -239,144 +250,171 @@ export default function LayoutEditor({ preset, onLayoutChange, onFontChange, pre
 
   const selectedEl = elements.find(el => el.id === selected);
 
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-4" ref={outerRef}>
-      {/* Toolbar */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Badge variant="secondary" className="mono text-xs">{resolution}</Badge>
-          <span className="text-xs text-muted-foreground">Drag to reposition · Handle to resize</span>
+    <div className="flex items-stretch flex-1 min-h-0" ref={outerRef}>
+
+      {/* ── Canvas column ──────────────────────────────────────────────────── */}
+      <div className="flex-1 min-w-0 flex flex-col gap-2 justify-center" ref={canvasContainerRef}>
+
+        {/* Toolbar */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary" className="mono text-xs">{resolution}</Badge>
+            <span className="text-xs text-muted-foreground hidden sm:block">Drag to reposition · Handle to resize</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline" size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingOverlay || !preset || locked}
+            >
+              {uploadingOverlay
+                ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                : <Plus className="w-3.5 h-3.5" />}
+              Add Image
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={e => e.target.files[0] && uploadOverlay(e.target.files[0])}
+            />
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline" size="sm"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploadingOverlay || !preset || locked}
+
+        {/* Canvas + generate button — centered horizontally */}
+        <div className="flex flex-col items-center gap-2">
+          <div
+            ref={canvasRef}
+            className="relative rounded-lg overflow-hidden border border-border bg-black select-none flex-shrink-0"
+            style={{ width: canvasW, height: canvasH }}
+            onClick={() => setSelected(null)}
           >
-            {uploadingOverlay
-              ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-              : <Plus className="w-3.5 h-3.5" />
-            }
-            Add Image
-          </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={e => e.target.files[0] && uploadOverlay(e.target.files[0])}
-          />
-        </div>
-      </div>
-
-      <div className={stacked ? 'space-y-3' : 'flex gap-4'}>
-        {/* Canvas */}
-        <div
-          ref={canvasRef}
-          className={cn(
-            "relative rounded-lg overflow-hidden border border-border bg-black select-none",
-            stacked ? "w-full flex-shrink-0" : "flex-shrink-0"
-          )}
-          style={{ width: stacked ? canvasW : CANVAS_W, height: canvasH }}
-          onClick={() => setSelected(null)}
-        >
-          {/* Background preview */}
-          {previewBgUrl && previewBgIsVideo && (
-            <video
-              key={previewBgUrl}
-              src={previewBgUrl}
-              className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-              style={{ filter: CSS_FILTERS[imageFilter] || '' }}
-              muted autoPlay loop playsInline
-            />
-          )}
-          {previewBgUrl && !previewBgIsVideo && (
-            <img
-              src={previewBgUrl}
-              alt=""
-              className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-              style={{ filter: CSS_FILTERS[imageFilter] || '' }}
-            />
-          )}
-
-          {/* Grid overlay */}
-          <div className="absolute inset-0 pointer-events-none opacity-10"
-            style={{
-              backgroundImage: 'linear-gradient(rgba(255,255,255,.3) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.3) 1px, transparent 1px)',
-              backgroundSize: `${canvasW / 6}px ${canvasH / 6}px`,
-            }}
-          />
-          {/* Center crosshair */}
-          <div className="absolute inset-0 pointer-events-none opacity-20">
-            <div className="absolute top-1/2 left-0 right-0 h-px bg-white" />
-            <div className="absolute left-1/2 top-0 bottom-0 w-px bg-white" />
-          </div>
-
-          {/* Background dim overlay (below elements) */}
-          {dimBackground > 0 && (
-            <div
-              className="absolute inset-0 pointer-events-none bg-black"
-              style={{ opacity: dimBackground }}
-            />
-          )}
-
-          {/* Elements */}
-          {elements.filter(el => el.visible !== false).map(el => (
-            <CanvasElement
-              key={el.id}
-              el={el}
-              canvasW={canvasW}
-              canvasH={canvasH}
-              selected={selected === el.id}
-              onMouseDown={onMouseDown}
-              fontFamily={fontFamily}
-              previewText={previewText}
-            />
-          ))}
-        </div>
-
-        {/* Side panel */}
-        {stacked ? (
-          /* Stacked mode: 2-column grid — left: dim+list, right: selected controls */
-          <div className="grid grid-cols-2 gap-3 min-w-0">
-            <div className="space-y-3">
-              <SidePanelDim dimBackground={dimBackground} onDimChange={handleDimChange} grain={grain} onGrainChange={handleGrainChange} locked={locked} />
-              <SidePanelList elements={elements} selected={selected} setSelected={setSelected} updateElement={updateElement} removeOverlayEl={removeOverlayEl} locked={locked} />
-            </div>
-            <div>
-              {selectedEl && (
-                <SidePanelControls
-                  selectedEl={selectedEl}
-                  updateElement={updateElement}
-                  fontFamily={fontFamily}
-                  handleFontFamilyChange={handleFontFamilyChange}
-                  locked={locked}
-                  previewText={previewText}
-                />
-              )}
-            </div>
-          </div>
-        ) : (
-          /* Horizontal mode: side panel to the right of canvas */
-          <div className="flex-1 space-y-3 min-w-0">
-            <SidePanelDim dimBackground={dimBackground} onDimChange={handleDimChange} grain={grain} onGrainChange={handleGrainChange} locked={locked} />
-            <SidePanelList elements={elements} selected={selected} setSelected={setSelected} updateElement={updateElement} removeOverlayEl={removeOverlayEl} locked={locked} />
-            {selectedEl && (
-              <SidePanelControls
-                selectedEl={selectedEl}
-                updateElement={updateElement}
-                fontFamily={fontFamily}
-                handleFontFamilyChange={handleFontFamilyChange}
-                locked={locked}
-                previewText={previewText}
+            {/* Background preview */}
+            {previewBgUrl && previewBgIsVideo && (
+              <video
+                key={previewBgUrl}
+                src={previewBgUrl}
+                className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                style={{ filter: CSS_FILTERS[imageFilter] || '' }}
+                muted autoPlay loop playsInline
               />
             )}
+            {previewBgUrl && !previewBgIsVideo && (
+              <img
+                src={previewBgUrl}
+                alt=""
+                className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                style={{ filter: CSS_FILTERS[imageFilter] || '' }}
+              />
+            )}
+
+            {/* Grid overlay */}
+            <div className="absolute inset-0 pointer-events-none opacity-10"
+              style={{
+                backgroundImage: 'linear-gradient(rgba(255,255,255,.3) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.3) 1px, transparent 1px)',
+                backgroundSize: `${canvasW / 6}px ${canvasH / 6}px`,
+              }}
+            />
+            {/* Center crosshair */}
+            <div className="absolute inset-0 pointer-events-none opacity-20">
+              <div className="absolute top-1/2 left-0 right-0 h-px bg-white" />
+              <div className="absolute left-1/2 top-0 bottom-0 w-px bg-white" />
+            </div>
+
+            {/* Background dim */}
+            {dimBackground > 0 && (
+              <div
+                className="absolute inset-0 pointer-events-none bg-black"
+                style={{ opacity: dimBackground }}
+              />
+            )}
+
+            {/* Elements */}
+            {elements.filter(el => el.visible !== false).map(el => (
+              <CanvasElement
+                key={el.id}
+                el={el}
+                canvasW={canvasW}
+                canvasH={canvasH}
+                selected={selected === el.id}
+                onMouseDown={onMouseDown}
+                fontFamily={fontFamily}
+                previewText={previewText}
+              />
+            ))}
           </div>
-        )}
+
+          {/* Generate button — same width as canvas */}
+          {generateButton && (
+            <div style={{ width: canvasW }}>{generateButton}</div>
+          )}
+        </div>
       </div>
+
+      {/* ── Sidebar toggle handle ───────────────────────────────────────────── */}
+      <button
+        onClick={() => setSidebarOpen(v => !v)}
+        className={cn(
+          'flex-shrink-0 self-stretch flex items-center justify-center w-6 mx-1 rounded-md',
+          'text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors',
+        )}
+        title={sidebarOpen ? 'Collapse panel' : 'Expand panel'}
+      >
+        {sidebarOpen
+          ? <ChevronRight className="w-3.5 h-3.5" />
+          : <ChevronLeft  className="w-3.5 h-3.5" />}
+      </button>
+
+      {/* ── Sidebar ────────────────────────────────────────────────────────── */}
+      <div className={cn(
+        'flex-shrink-0 overflow-hidden transition-[width] duration-200 h-full',
+        sidebarOpen ? 'w-[403px]' : 'w-0',
+      )}>
+        <div className="w-full h-full overflow-y-auto overflow-x-hidden space-y-3 pb-6">
+
+          {/* Built-in: dim + grain */}
+          <SidePanelDim
+            dimBackground={dimBackground} onDimChange={handleDimChange}
+            grain={grain} onGrainChange={handleGrainChange}
+            locked={locked}
+          />
+
+          {/* Built-in: element list */}
+          <SidePanelList
+            elements={elements} selected={selected} setSelected={setSelected}
+            updateElement={updateElement} removeOverlayEl={removeOverlayEl}
+            locked={locked}
+          />
+
+          {/* Built-in: selected element controls */}
+          {selectedEl && (
+            <SidePanelControls
+              selectedEl={selectedEl}
+              updateElement={updateElement}
+              fontFamily={fontFamily}
+              handleFontFamilyChange={handleFontFamilyChange}
+              locked={locked}
+              previewText={previewText}
+            />
+          )}
+
+          {/* Extra config from parent (GeneratePanel / PostsPanel) */}
+          {sidebarContent && (
+            <div className="space-y-3 border-t border-border/50 pt-3">
+              {sidebarContent}
+            </div>
+          )}
+        </div>
+      </div>
+
     </div>
   );
 }
+
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
 function SidePanelDim({ dimBackground, onDimChange, grain, onGrainChange, locked }) {
   return (
@@ -412,7 +450,6 @@ function SidePanelDim({ dimBackground, onDimChange, grain, onGrainChange, locked
     </div>
   );
 }
-
 
 function SidePanelList({ elements, selected, setSelected, updateElement, removeOverlayEl, locked }) {
   return (
@@ -527,7 +564,6 @@ function CanvasElement({ el, canvasW, canvasH, selected, onMouseDown, fontFamily
         el.locked && "opacity-70"
       )}
     >
-      {/* Content */}
       {el.type === 'logo' && el.src && (
         <img src={el.src} alt="Logo" className="w-full h-full object-contain" draggable={false} />
       )}
@@ -561,7 +597,6 @@ function CanvasElement({ el, canvasW, canvasH, selected, onMouseDown, fontFamily
         </div>
       )}
 
-      {/* Resize handle */}
       {selected && !el.locked && (
         <div
           className="absolute right-0 bottom-0 w-4 h-4 bg-primary rounded-tl cursor-se-resize flex items-center justify-center"
@@ -571,7 +606,6 @@ function CanvasElement({ el, canvasW, canvasH, selected, onMouseDown, fontFamily
         </div>
       )}
 
-      {/* Lock indicator */}
       {el.locked && selected && (
         <div className="absolute top-0 right-0 w-4 h-4 bg-yellow-500 rounded-bl flex items-center justify-center">
           <Lock className="w-2.5 h-2.5 text-black" />
@@ -634,7 +668,6 @@ function NumInput({ label, value, onChange, min, max, disabled }) {
 function buildElements(layout, preset) {
   const elements = [];
 
-  // Logo element (always present, toggle enabled)
   elements.push({
     id:      'logo',
     type:    'logo',
@@ -642,13 +675,12 @@ function buildElements(layout, preset) {
     x:       layout?.logo?.x  ?? 50,
     y:       layout?.logo?.y  ?? 90,
     w:       layout?.logo?.w  ?? 18,
-    h:       layout?.logo?.w  ?? 18, // maintain ratio
+    h:       layout?.logo?.w  ?? 18,
     locked:  false,
     visible: layout?.logo?.enabled !== false,
     src:     preset?.logoFile ? `${API}/preset-logos/${preset.id}/${preset.logoFile}` : null,
   });
 
-  // Subtitle element
   elements.push({
     id:        'subtitle',
     type:      'subtitle',
@@ -663,7 +695,6 @@ function buildElements(layout, preset) {
     visible:   layout?.subtitles?.enabled !== false,
   });
 
-  // Static image overlays from preset
   if (preset?.id && layout?.overlays) {
     for (const ov of layout.overlays) {
       elements.push({

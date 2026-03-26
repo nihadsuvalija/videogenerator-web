@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
   ImagePlus, Play, RefreshCw, Check, AlertCircle, Download,
-  Lock, Sliders, X, FileText,
-  Image, Film, Trash2, Upload, Hash, Type, Sparkles, LayoutGrid, List, Eye, StopCircle, BookOpen,
+  Lock, Sliders, X, FileText, ChevronDown,
+  Image, Film, Trash2, Upload, Type, Sparkles, LayoutGrid, List, Eye, StopCircle, BookOpen,
 } from 'lucide-react';
 import FontPicker from './FontPicker';
 import FilterPicker from './FilterPicker';
@@ -52,6 +52,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
   const [selectedImages, setSelectedImages] = useState([]);
   const [selectedVideos, setSelectedVideos] = useState([]);
   const [fileViewMode, setFileViewMode]       = useState('grid');
+  const [filePage, setFilePage]               = useState(0);
   const [fileLightboxSrc, setFileLightboxSrc] = useState(null);
   const [showBatchPicker, setShowBatchPicker] = useState(false);
 
@@ -68,6 +69,10 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
   const [localLayouts, setLocalLayouts]       = useState({ '1080x1080': DEFAULT_POST_LAYOUT });
   const [activeLayoutRes, setActiveLayoutRes] = useState('1080x1080');
 
+  const [logOpen, setLogOpen]                   = useState(false);
+  const [rightOpen, setRightOpen]               = useState({ resolution: false, filter: false, quotes: false });
+  const toggleRight = (key) => setRightOpen(prev => ({ ...prev, [key]: !prev[key] }));
+
   const [generating, setGenerating]             = useState(false);
   const [jobIds, setJobIds]                     = useState([]);
   const [jobs, setJobs]                         = useState([]);
@@ -83,6 +88,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
       .then(r => r.json())
       .then(data => {
         setBatchFiles(data);
+        setFilePage(0);
         const bt = data.videos.length > 0 && data.images.length === 0 ? 'video'
           : data.images.length > 0 && data.videos.length === 0 ? 'image'
           : null;
@@ -237,7 +243,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
 
   const generate = async () => {
     if (!selectedBatch || activeFiles.length === 0) return;
-    setGenerating(true); setJobs([]); setJobIds([]);
+    setGenerating(true); setJobs([]); setJobIds([]); setLogOpen(true);
     try {
       let resolvedQuotes = quotes;
       let usedQuoteIds = [];
@@ -284,71 +290,29 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
 
   const activeFiles = batchType === 'video' ? selectedVideos : selectedImages;
 
-  return (
-    <div className="space-y-4">
+  const FILE_PAGE_SIZE = 24;
+  const activeFileList = batchType === 'video' ? batchFiles.videos : batchFiles.images;
+  const filePageCount = Math.ceil(activeFileList.length / FILE_PAGE_SIZE);
+  const pagedFiles = activeFileList.slice(filePage * FILE_PAGE_SIZE, (filePage + 1) * FILE_PAGE_SIZE);
 
-      {/* ── 3-column layout: Batch+Log | Layout Editor | Config ── */}
-      <div className="grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,360px)] gap-5 xl:h-[calc(100vh-7rem)]">
-
-        {/* ── COL 1 (DOM): Layout Editor → center ──────────────────────────── */}
-        <div className="space-y-4 min-w-0 xl:order-2 col-scroll xl:pb-4">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Hash className="w-4 h-4 text-primary" /> Layout Editor
-              </CardTitle>
-              <CardDescription>
-                Drag elements to reposition · Select an element to adjust alignment, font &amp; bold
-                {!activePreset && ' · Changes are local until a preset is applied'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {selectedResolutions.length > 1 && (
-                <div className="flex flex-wrap gap-1 mb-3">
-                  {selectedResolutions.map(res => (
-                    <button key={res} onClick={() => setActiveLayoutRes(res)}
-                      className={cn(
-                        "px-3 py-1 rounded-md text-xs font-mono font-semibold transition-all border",
-                        activeLayoutRes === res
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "bg-secondary text-muted-foreground border-border hover:text-foreground hover:border-primary/40"
-                      )}>
-                      {RESOLUTION_ICONS[res] && <span className="mr-1">{RESOLUTION_ICONS[res]}</span>}{res}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <LayoutEditor
-                key={activeLayoutRes}
-                preset={layoutPreset}
-                onLayoutChange={handleLayoutChange}
-                onFontChange={(patch) => { if (patch.fontFamily) { setFontFamily(patch.fontFamily); if (activePreset) saveToPreset(patch); } }}
-                previewBgUrl={selectedBatch && selectedImages[0] ? `${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(selectedImages[0])}` : null}
-                previewBgIsVideo={false}
-                stacked
-                locked={locked}
-                previewText={quotesMode === 'library' ? libraryQuotes[0]?.text : quotes.split('\n').find(l => l.trim())}
-                imageFilter={imageFilter}
-              />
-            </CardContent>
-          </Card>
-        </div>{/* end COL 1 */}
-
-        {/* ── COL 2 (DOM): Config → right ──────────────────────────────────── */}
-        <div className="space-y-4 min-w-0 xl:order-3 col-scroll xl:pb-4">
+  const layoutSidebarContent = (
+    <>
 
           {/* Resolution */}
           <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <ImagePlus className="w-4 h-4 text-primary" /> Resolution
-                {selectedResolutions.length > 1 && (
-                  <Badge className="text-xs bg-primary/20 text-primary border-primary/30">{selectedResolutions.length} resolutions</Badge>
-                )}
-              </CardTitle>
+            <CardHeader className="px-4 pt-4 pb-3 cursor-pointer select-none" onClick={() => toggleRight('resolution')}>
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <ImagePlus className="w-4 h-4 text-primary" /> Resolution
+                  {selectedResolutions.length > 1 && (
+                    <Badge className="text-xs bg-primary/20 text-primary border-primary/30">{selectedResolutions.length} resolutions</Badge>
+                  )}
+                </CardTitle>
+                <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform duration-200 flex-shrink-0", rightOpen.resolution && "rotate-180")} />
+              </div>
               <CardDescription>Set how many posts to generate per resolution</CardDescription>
             </CardHeader>
-            <CardContent>
+            {rightOpen.resolution && <CardContent className="px-4 pb-4">
               <div className="grid gap-2">
                 {RESOLUTION_OPTIONS.map(r => {
                   const selected = selectedResolutions.includes(r.key);
@@ -382,37 +346,40 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                   );
                 })}
               </div>
-            </CardContent>
+            </CardContent>}
           </Card>
 
           {/* Filter */}
           <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <span className="text-base">🎨</span> Color Filter
-              </CardTitle>
+            <CardHeader className="px-4 pt-4 pb-3 cursor-pointer select-none" onClick={() => toggleRight('filter')}>
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <span className="text-base">🎨</span> Color Filter
+                </CardTitle>
+                <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform duration-200 flex-shrink-0", rightOpen.filter && "rotate-180")} />
+              </div>
               <CardDescription>Apply a cinematic tint or color grade to the images</CardDescription>
             </CardHeader>
-            <CardContent>
+            {rightOpen.filter && <CardContent className="px-4 pb-4">
               <FilterPicker value={imageFilter} onChange={setImageFilter} disabled={locked} />
-            </CardContent>
+            </CardContent>}
           </Card>
 
           {/* Quotes & Text */}
           <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-primary" /> Quotes &amp; Text
-                    <Badge variant="secondary" className="text-xs">Optional</Badge>
-                  </CardTitle>
-                  <CardDescription>
-                    {quotesMode === 'library' ? 'Using quotes from your library' : 'One per line — each post gets one quote burned in'}
-                  </CardDescription>
-                </div>
+            <CardHeader className="px-4 pt-4 pb-3">
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <CardTitle className="text-base flex items-center gap-2 min-w-0 truncate">
+                  <FileText className="w-4 h-4 text-primary flex-shrink-0" /> Quotes &amp; Text
+                </CardTitle>
+                <Badge variant="secondary" className="text-xs flex-shrink-0">Optional</Badge>
+              </div>
+              <div className="flex items-center justify-between gap-2 mt-0.5">
+                <CardDescription className="text-xs">
+                  {quotesMode === 'library' ? 'Using quotes from library' : 'One per line — each post picks one'}
+                </CardDescription>
                 {quotesMode === 'manual' && (
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <div className="flex items-center gap-1 flex-shrink-0">
                     {quotes && (
                       <button onClick={() => setQuotes('')} className="text-muted-foreground hover:text-destructive transition-colors p-1">
                         <Trash2 className="w-3.5 h-3.5" />
@@ -438,9 +405,12 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                       onChange={e => e.target.files[0] && handleTxtUpload(e.target.files[0])} />
                   </div>
                 )}
+                <button onClick={e => { e.stopPropagation(); toggleRight('quotes'); }} className="p-0.5 text-muted-foreground hover:text-foreground transition-colors rounded flex-shrink-0">
+                  <ChevronDown className={cn("w-4 h-4 transition-transform duration-200", rightOpen.quotes && "rotate-180")} />
+                </button>
               </div>
             </CardHeader>
-            <CardContent className="space-y-3">
+            {rightOpen.quotes && <CardContent className="px-4 pb-4 space-y-3">
               {/* Mode toggle */}
               <div className="flex gap-1.5 bg-secondary rounded-lg p-1">
                 <button onClick={() => switchQuotesMode('manual')}
@@ -544,13 +514,20 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                   </div>
                 </div>
               </div>
-            </CardContent>
+            </CardContent>}
           </Card>
 
-        </div>{/* end COL 2 */}
+    </>
+  );
 
-        {/* ── COL 3 (DOM): Batch + Generate + Log → left ───────────────────── */}
-        <div className="flex flex-col gap-4 xl:order-1 col-scroll xl:pb-4 [will-change:transform]">
+  return (
+    <div className="flex flex-col xl:h-[calc(100vh-5rem)] gap-3">
+
+      {/* ── 3-column layout: Batches | Layout Editor | Config ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr_360px] gap-4 flex-1 min-h-0">
+
+        {/* ── LEFT col (DOM first): banner, batch, files, log ── */}
+        <div className="flex flex-col gap-2 xl:order-1 col-scroll min-h-0 [will-change:transform]">
 
           {/* Preset picker */}
           {presets.length > 0 && (
@@ -712,8 +689,8 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
               <CardContent>
                 {batchType === 'video' ? (
                   fileViewMode === 'list' ? (
-                    <div className="grid gap-1 max-h-40 overflow-y-auto pr-1">
-                      {batchFiles.videos.map(f => (
+                    <div className="grid gap-1">
+                      {pagedFiles.map(f => (
                         <button key={f}
                           onClick={() => setSelectedVideos(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])}
                           className={cn("flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-all text-left w-full",
@@ -728,7 +705,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                     </div>
                   ) : (
                     <div style={{ columns: '3 80px', columnGap: 6 }}>
-                      {batchFiles.videos.map(f => (
+                      {pagedFiles.map(f => (
                         <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
                           <PostImageGridCell
                             name={f}
@@ -743,8 +720,8 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                   )
                 ) : (
                   fileViewMode === 'list' ? (
-                  <div className="grid gap-1 max-h-40 overflow-y-auto pr-1">
-                    {batchFiles.images.map(f => (
+                  <div className="grid gap-1">
+                    {pagedFiles.map(f => (
                       <button key={f}
                         onClick={() => setSelectedImages(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])}
                         className={cn("flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-all text-left w-full",
@@ -759,7 +736,7 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                   </div>
                 ) : (
                   <div style={{ columns: '3 80px', columnGap: 6 }}>
-                    {batchFiles.images.map(f => (
+                    {pagedFiles.map(f => (
                       <div key={f} style={{ breakInside: 'avoid', marginBottom: 6 }}>
                         <PostImageGridCell
                           name={f}
@@ -773,59 +750,101 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
                   </div>
                 )
                 )}
+              {filePageCount > 1 && (
+                <FilePagination page={filePage} pageCount={filePageCount} onPage={setFilePage} total={activeFileList.length} />
+              )}
               </CardContent>
             </Card>
           )}
-
-          {/* Generate button */}
-          <Button className="w-full h-14 text-base font-bold gap-2 shadow-lg"
-            onClick={generate} disabled={generating || activeFiles.length === 0 || !selectedBatch}>
-            {generating ? (
-              <><RefreshCw className="w-5 h-5 animate-spin" /> Generating Posts…</>
-            ) : (
-              <><ImagePlus className="w-5 h-5" /> Generate {totalPosts} Post{totalPosts !== 1 ? 's' : ''}</>
-            )}
-          </Button>
-
-          {/* Generation log */}
-          <div className="rounded-xl border border-border overflow-hidden bg-card flex flex-col flex-1 min-h-0">
-            <div className="px-4 py-3 border-b border-border bg-secondary/30 flex items-center justify-between flex-shrink-0">
-              <div className="flex items-center gap-2">
-                <ImagePlus className="w-4 h-4 text-primary" />
-                <span className="text-sm font-semibold">Generation Log</span>
-              </div>
-              {jobs.length > 0 && (
-                <Badge variant="secondary" className="text-xs">
-                  {jobs.filter(j => j.status === 'running').length > 0
-                    ? `${jobs.filter(j => j.status === 'running').length} running`
-                    : `${jobs.length} job${jobs.length !== 1 ? 's' : ''}`}
-                </Badge>
-              )}
-            </div>
-            {jobs.length === 0 ? (
-              <div className="flex flex-col items-center justify-center flex-1 px-6 text-center">
-                <div className="w-10 h-10 rounded-full bg-secondary/50 flex items-center justify-center mb-3">
-                  <ImagePlus className="w-4 h-4 text-muted-foreground/50" />
-                </div>
-                <p className="text-sm font-medium text-muted-foreground">Ready to generate</p>
-                <p className="text-xs text-muted-foreground/60 mt-1">
-                  {!selectedBatch ? 'Select a batch to get started' : activeFiles.length === 0 ? `Select ${batchType === 'video' ? 'videos' : 'images'} from the batch` : 'Click Generate when ready'}
-                </p>
-              </div>
-            ) : (
-              <div className="p-3 space-y-3 overflow-y-auto flex-1">
-                {jobs.map(j => <PostJobStatus key={j.id} job={j} />)}
-              </div>
-            )}
-          </div>
 
           {fileLightboxSrc && (
             <MediaLightbox src={fileLightboxSrc} onClose={() => setFileLightboxSrc(null)} />
           )}
 
-        </div>{/* end COL 3 */}
+        </div>{/* end LEFT col */}
+
+        {/* ── CENTER col: Layout Editor ── */}
+        <div className="min-w-0 xl:order-2 overflow-hidden flex flex-col gap-2 min-h-0">
+          {selectedResolutions.length > 1 && (
+            <div className="flex flex-wrap gap-1 mb-1">
+              {selectedResolutions.map(res => (
+                <button key={res} onClick={() => setActiveLayoutRes(res)}
+                  className={cn(
+                    "px-3 py-1 rounded-md text-xs font-mono font-semibold transition-all border",
+                    activeLayoutRes === res
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-secondary text-muted-foreground border-border hover:text-foreground hover:border-primary/40"
+                  )}>
+                  {RESOLUTION_ICONS[res] && <span className="mr-1">{RESOLUTION_ICONS[res]}</span>}{res}
+                </button>
+              ))}
+            </div>
+          )}
+          <LayoutEditor
+            key={activeLayoutRes}
+            preset={layoutPreset}
+            onLayoutChange={handleLayoutChange}
+            onFontChange={(patch) => { if (patch.fontFamily) { setFontFamily(patch.fontFamily); if (activePreset) saveToPreset(patch); } }}
+            previewBgUrl={selectedBatch && selectedImages[0] ? `${API}/batches-media/${selectedBatch}/images/${encodeURIComponent(selectedImages[0])}` : null}
+            previewBgIsVideo={false}
+            locked={locked}
+            previewText={quotesMode === 'library' ? libraryQuotes[0]?.text : quotes.split('\n').find(l => l.trim())}
+            imageFilter={imageFilter}
+            sidebarDefaultOpen={false}
+            generateButton={
+              <Button className="w-full h-14 text-base font-bold gap-2 shadow-lg"
+                onClick={generate} disabled={generating || activeFiles.length === 0 || !selectedBatch}>
+                {generating ? (
+                  <><RefreshCw className="w-5 h-5 animate-spin" /> Generating Posts…</>
+                ) : (
+                  <><ImagePlus className="w-5 h-5" /> Generate {totalPosts} Post{totalPosts !== 1 ? 's' : ''}</>
+                )}
+              </Button>
+            }
+          />
+        </div>{/* end CENTER col */}
+
+        {/* ── RIGHT col: Configuration parameters ── */}
+        <div className="flex flex-col gap-2 xl:order-3 col-scroll min-h-0">
+          {layoutSidebarContent}
+        </div>{/* end RIGHT col */}
 
       </div>{/* end grid */}
+
+      {/* ── Generation log — full width below both columns ── */}
+      <div className={cn("flex-shrink-0 rounded-xl border border-border overflow-hidden bg-card flex flex-col", logOpen && "h-52")}>
+        <button onClick={() => setLogOpen(v => !v)} className="px-4 py-2.5 flex items-center justify-between w-full text-left hover:bg-secondary/20 transition-colors">
+          <div className="flex items-center gap-2">
+            <ImagePlus className="w-4 h-4 text-primary" />
+            <span className="text-sm font-semibold">Generation Log</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {jobs.length > 0 && (
+              <Badge variant="secondary" className="text-xs">
+                {jobs.filter(j => j.status === 'running').length > 0
+                  ? `${jobs.filter(j => j.status === 'running').length} running`
+                  : `${jobs.length} job${jobs.length !== 1 ? 's' : ''}`}
+              </Badge>
+            )}
+            <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform duration-200", logOpen && "rotate-180")} />
+          </div>
+        </button>
+        {logOpen && (jobs.length === 0 ? (
+          <div className="flex flex-col items-center justify-center flex-1 px-6 text-center border-t border-border">
+            <div className="w-10 h-10 rounded-full bg-secondary/50 flex items-center justify-center mb-3">
+              <ImagePlus className="w-4 h-4 text-muted-foreground/50" />
+            </div>
+            <p className="text-sm font-medium text-muted-foreground">Ready to generate</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">
+              {!selectedBatch ? 'Select a batch to get started' : activeFiles.length === 0 ? `Select ${batchType === 'video' ? 'videos' : 'images'} from the batch` : 'Click Generate when ready'}
+            </p>
+          </div>
+        ) : (
+          <div className="p-3 space-y-3 overflow-y-auto flex-1 border-t border-border">
+            {jobs.map(j => <PostJobStatus key={j.id} job={j} />)}
+          </div>
+        ))}
+      </div>
 
       {showBatchPicker && (
         <BatchPickerModal
@@ -839,6 +858,26 @@ export default function PostsPanel({ batches, incomingPreset, onClearIncomingPre
 }
 
 // ── Image grid cell (selection + preview) ─────────────────────────────────────
+function FilePagination({ page, pageCount, onPage, total }) {
+  return (
+    <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
+      <button
+        onClick={() => onPage(p => Math.max(0, p - 1))}
+        disabled={page === 0}
+        className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed px-2 py-1 rounded border border-border hover:border-primary/40 transition-all"
+      >← Prev</button>
+      <span className="text-xs text-muted-foreground">
+        {page + 1} / {pageCount} <span className="text-muted-foreground/50">({total})</span>
+      </span>
+      <button
+        onClick={() => onPage(p => Math.min(pageCount - 1, p + 1))}
+        disabled={page === pageCount - 1}
+        className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed px-2 py-1 rounded border border-border hover:border-primary/40 transition-all"
+      >Next →</button>
+    </div>
+  );
+}
+
 function PostImageGridCell({ name, src, selected, onToggle, onPreview }) {
   const [hovered, setHovered] = useState(false);
   return (
